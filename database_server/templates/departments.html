@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Departments - DataVault{% endblock %}
+{% block page_title %}Departments{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+    {% for dept in departments %}
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <div>
+                        <h5 class="card-title mb-1">{{ dept.name }}</h5>
+                        <small class="text-muted">Department ID: {{ dept.id }}</small>
+                    </div>
+                    <span class="badge bg-primary rounded-pill">{{ dept.employee_count }} staff</span>
+                </div>
+
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between text-muted mb-1">
+                        <span>Budget</span>
+                        <span class="fw-bold text-dark">${{ "{:,.0f}".format(dept.budget) }}</span>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                        <div class="progress-bar" style="width: {{ (dept.budget / 500000 * 100)|int }}%"></div>
+                    </div>
+                </div>
+
+                <a href="{{ url_for('employees') }}?dept={{ dept.name }}" class="btn btn-outline-primary btn-sm w-100">
+                    <i class="bi bi-people me-1"></i> View Employees
+                </a>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

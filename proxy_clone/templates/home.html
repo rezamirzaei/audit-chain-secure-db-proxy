@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+
+{% block title %}Home - QueryGate{% endblock %}
+
+{% block content %}
+<div class="hero-section">
+    <h1>Welcome to <span class="highlight">QueryGate</span></h1>
+    <p class="lead text-muted">
+        Execute database queries securely through our proxy gateway
+    </p>
+</div>
+
+{% if not status.has_credentials %}
+<div class="row justify-content-center">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body text-center py-5">
+                <i class="bi bi-plug fs-1 text-muted d-block mb-3"></i>
+                <h4>Not Connected</h4>
+                <p class="text-muted">Connect to a database server to start querying</p>
+                <a href="/connect" class="btn btn-accent">
+                    <i class="bi bi-plug-fill me-2"></i>Connect Now
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}
+
+<div class="row g-4">
+    <!-- Query Editor -->
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-code-square me-2"></i>Query Editor</span>
+                <div>
+                    <button class="btn btn-sm btn-outline-light me-2" onclick="loadSampleQuery('employees')">
+                        Employees
+                    </button>
+                    <button class="btn btn-sm btn-outline-light me-2" onclick="loadSampleQuery('departments')">
+                        Departments
+                    </button>
+                    <button class="btn btn-sm btn-outline-light" onclick="loadSampleQuery('projects')">
+                        Projects
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <textarea id="queryInput" class="form-control query-editor mb-3"
+                    placeholder="-- Write your SQL query here
+-- Example:
+SELECT * FROM employees WHERE department = 'Engineering'
+SELECT name, salary FROM employees ORDER BY salary DESC
+"></textarea>
+
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <button class="btn btn-accent" onclick="executeQuery()">
+                            <i class="bi bi-play-fill me-1"></i> Execute Query
+                        </button>
+                        <button class="btn btn-outline-light" onclick="clearAll()">
+                            <i class="bi bi-trash me-1"></i> Clear
+                        </button>
+                    </div>
+                    <span id="queryStatus" class="text-muted small"></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results -->
+        <div class="card mt-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-table me-2"></i>Query Results</span>
+                <span id="resultCount" class="result-count">0 rows</span>
+            </div>
+            <div class="card-body" style="max-height: 400px; overflow: auto;">
+                <div id="resultsContainer">
+                    <div class="text-center py-5 text-muted">
+                        <i class="bi bi-inbox fs-1 d-block mb-3"></i>
+                        <p>Execute a query to see results here</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="col-lg-4">
+        <!-- Connection Info -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="bi bi-shield-check me-2"></i>Connection Status
+            </div>
+            <div class="card-body">
+                <div class="d-flex justify-content-between mb-2">
+                    <span class="text-muted">Server</span>
+                    <span class="text-success"><i class="bi bi-check-circle"></i> Connected</span>
+                </div>
+                <div class="d-flex justify-content-between mb-2">
+                    <span class="text-muted">User</span>
+                    <code>{{ status.username }}</code>
+                </div>
+                <div class="d-flex justify-content-between">
+                    <span class="text-muted">Session</span>
+                    <span class="text-success">Active</span>
+                </div>
+                <hr>
+                <a href="/mirror/" class="btn btn-outline-light w-100 mb-2" target="_blank">
+                    <i class="bi bi-window me-2"></i>Open Original UI (Mirrored)
+                </a>
+                <form action="/disconnect" method="post">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-outline-danger w-100">
+                        <i class="bi bi-x-circle me-2"></i>Disconnect
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Database Schema -->
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-database me-2"></i>Database Schema
+            </div>
+            <div class="card-body" id="schemaContainer">
+                <div class="text-center py-3 text-muted">
+                    <div class="spinner-border spinner-border-sm me-2"></div>
+                    Loading schema...
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    function loadSampleQuery(table) {
+        const queries = {
+            'employees': 'SELECT * FROM employees ORDER BY salary DESC LIMIT 10',
+            'departments': 'SELECT * FROM departments ORDER BY budget DESC',
+            'projects': "SELECT * FROM projects WHERE status = 'active'"
+        };
+        document.getElementById('queryInput').value = queries[table] || `SELECT * FROM ${table}`;
+    }
+
+    function clearAll() {
+        document.getElementById('queryInput').value = '';
+        document.getElementById('resultsContainer').innerHTML = `
+            <div class="text-center py-5 text-muted">
+                <i class="bi bi-inbox fs-1 d-block mb-3"></i>
+                <p>Execute a query to see results here</p>
+            </div>
+        `;
+        document.getElementById('resultCount').textContent = '0 rows';
+        document.getElementById('queryStatus').textContent = '';
+    }
+
+    async function executeQuery() {
+        const query = document.getElementById('queryInput').value.trim();
+        if (!query) {
+            alert('Please enter a query');
+            return;
+        }
+
+        const status = document.getElementById('queryStatus');
+        const resultsContainer = document.getElementById('resultsContainer');
+        const resultCount = document.getElementById('resultCount');
+
+        status.textContent = 'Executing...';
+        status.className = 'text-warning small';
+
+        const startTime = performance.now();
+
+        try {
+            const response = await fetch('/api/query', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query })
+            });
+
+            const data = await response.json();
+            const duration = (performance.now() - startTime).toFixed(0);
+
+            if (data.success) {
+                status.textContent = `✓ Completed in ${duration}ms`;
+                status.className = 'text-success small';
+                resultCount.textContent = `${data.row_count} rows`;
+
+                if (!data.data || data.data.length === 0) {
+                    resultsContainer.innerHTML = `
+                        <div class="text-center py-4 text-muted">
+                            <i class="bi bi-inbox fs-3 d-block mb-2"></i>
+                            Query executed successfully. No rows returned.
+                        </div>
+                    `;
+                } else {
+                    const columns = data.columns;
+                    resultsContainer.innerHTML = `
+                        <div class="table-responsive">
+                            <table class="table table-hover mb-0">
+                                <thead>
+                                    <tr>${columns.map(col => `<th>${col}</th>`).join('')}</tr>
+                                </thead>
+                                <tbody>
+                                    ${data.data.map(row => `
+                                        <tr>${columns.map(col =>
+                                            `<td>${row[col] !== null ? row[col] : '<span class="text-muted">null</span>'}</td>`
+                                        ).join('')}</tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    `;
+                }
+            } else {
+                status.textContent = '✗ Error';
+                status.className = 'text-danger small';
+                resultsContainer.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        <strong>Error:</strong> ${data.error}
+                    </div>
+                `;
+            }
+        } catch (error) {
+            status.textContent = '✗ Error';
+            status.className = 'text-danger small';
+            resultsContainer.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle me-2"></i>
+                    <strong>Error:</strong> ${error.message}
+                </div>
+            `;
+        }
+    }
+
+    async function loadSchema() {
+        try {
+            const response = await fetch('/api/tables');
+            const data = await response.json();
+
+            if (data.tables) {
+                const container = document.getElementById('schemaContainer');
+                container.innerHTML = data.tables.map(table => `
+                    <div class="schema-card" onclick="loadSampleQuery('${table.name}')">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h6><i class="bi bi-table me-2"></i>${table.name}</h6>
+                            <span class="badge bg-secondary">${table.row_count} rows</span>
+                        </div>
+                        <small class="text-muted">
+                            ${table.columns.map(c => c.name).join(', ')}
+                        </small>
+                    </div>
+                `).join('');
+            }
+        } catch (error) {
+            document.getElementById('schemaContainer').innerHTML = `
+                <div class="text-center text-muted py-3">
+                    Failed to load schema
+                </div>
+            `;
+        }
+    }
+
+    // Keyboard shortcut: Ctrl+Enter
+    document.getElementById('queryInput')?.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.key === 'Enter') {
+            executeQuery();
+        }
+    });
+
+    // Load schema on page load
+    {% if status.has_credentials %}
+    loadSchema();
+    {% endif %}
+</script>
+{% endblock %}

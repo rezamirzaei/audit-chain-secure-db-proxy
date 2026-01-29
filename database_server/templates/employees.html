@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Employees - DataVault{% endblock %}
+{% block page_title %}Employees{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-people me-2"></i>All Employees ({{ employees|length }})</span>
+        <div>
+            <button class="btn btn-sm btn-outline-secondary me-2" onclick="exportTable()">
+                <i class="bi bi-download"></i> Export
+            </button>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover" id="employeesTable">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Department</th>
+                        <th>Salary</th>
+                        <th>Hire Date</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for emp in employees %}
+                    <tr>
+                        <td>{{ emp.id }}</td>
+                        <td><strong>{{ emp.name }}</strong></td>
+                        <td><a href="mailto:{{ emp.email }}">{{ emp.email }}</a></td>
+                        <td>
+                            <span class="badge bg-secondary">{{ emp.department }}</span>
+                        </td>
+                        <td>${{ "{:,.2f}".format(emp.salary) }}</td>
+                        <td>{{ emp.hire_date }}</td>
+                        <td>
+                            {% if emp.is_active %}
+                            <span class="badge bg-success badge-status">Active</span>
+                            {% else %}
+                            <span class="badge bg-danger badge-status">Inactive</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

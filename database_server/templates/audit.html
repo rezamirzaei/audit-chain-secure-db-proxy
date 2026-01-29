@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Audit Log - DataVault{% endblock %}
+{% block page_title %}Audit Log{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <i class="bi bi-shield-check me-2"></i>Security Audit Log
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>User</th>
+                        <th>Action</th>
+                        <th>Table</th>
+                        <th>Query</th>
+                        <th>Timestamp</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    <tr>
+                        <td>{{ log.id }}</td>
+                        <td>{{ log.username or 'System' }}</td>
+                        <td>
+                            <span class="badge
+                                {% if log.action == 'login' %}bg-success
+                                {% elif log.action == 'logout' %}bg-secondary
+                                {% elif log.action == 'query' %}bg-primary
+                                {% else %}bg-info{% endif %}">
+                                {{ log.action }}
+                            </span>
+                        </td>
+                        <td>{{ log.table_name or '-' }}</td>
+                        <td>
+                            {% if log.query %}
+                            <code class="small">{{ log.query[:50] }}{% if log.query|length > 50 %}...{% endif %}</code>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td><small class="text-muted">{{ log.timestamp }}</small></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

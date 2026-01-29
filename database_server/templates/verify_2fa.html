@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Two-Factor Authentication - DataVault</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(135deg, #1a1d21 0%, #212529 50%, #2c3034 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+        }
+
+        .auth-container {
+            width: 100%;
+            max-width: 420px;
+            padding: 2rem;
+        }
+
+        .auth-card {
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 2.5rem;
+        }
+
+        .auth-header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .auth-header .logo {
+            font-size: 3rem;
+            color: #0d6efd;
+            margin-bottom: 1rem;
+        }
+
+        .step-indicator {
+            display: flex;
+            justify-content: center;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .step {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #dee2e6;
+        }
+
+        .step.completed {
+            background: #198754;
+        }
+
+        .step.active {
+            background: #0d6efd;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+
+        .form-control {
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            border: 2px solid #dee2e6;
+            font-size: 1.5rem;
+            text-align: center;
+            letter-spacing: 0.5rem;
+        }
+
+        .form-control:focus {
+            border-color: #0d6efd;
+            box-shadow: 0 0 0 3px rgba(13,110,253,0.15);
+        }
+
+        .btn-verify {
+            padding: 0.75rem;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        .timer {
+            text-align: center;
+            color: #6c757d;
+            font-size: 0.9rem;
+            margin-top: 1rem;
+        }
+
+        .timer .countdown {
+            font-weight: 700;
+            color: #0d6efd;
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-container">
+        <div class="auth-card">
+            <div class="auth-header">
+                <div class="logo">
+                    <i class="bi bi-shield-lock-fill"></i>
+                </div>
+                <h4>Two-Factor Authentication</h4>
+                <p class="text-muted">Step 2 of 3</p>
+            </div>
+
+            <div class="step-indicator">
+                <div class="step completed" title="Password"></div>
+                <div class="step active" title="2FA Code"></div>
+                <div class="step" title="Security Question"></div>
+            </div>
+
+            {% if error %}
+            <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                <i class="bi bi-exclamation-triangle-fill me-2"></i>{{ error }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+            {% endif %}
+
+            <div class="text-center mb-4">
+                <p class="text-muted mb-1">Authenticating as</p>
+                <h5 class="mb-0"><i class="bi bi-person-circle me-2"></i>{{ username }}</h5>
+            </div>
+
+            <form method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <div class="mb-4">
+                    <label class="form-label text-center d-block">Enter your 6-digit authentication code</label>
+                    <input type="text" class="form-control" name="totp_code"
+                           maxlength="6" pattern="[0-9]{6}"
+                           placeholder="000000" required autofocus
+                           autocomplete="one-time-code">
+                    <div class="form-text text-center">
+                        Open your authenticator app to get the code
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-verify w-100">
+                    <i class="bi bi-check-circle me-2"></i>Verify Code
+                </button>
+            </form>
+
+            <div class="timer">
+                Code refreshes in <span class="countdown" id="countdown">30</span> seconds
+            </div>
+
+            <hr class="my-4">
+
+            <div class="text-center">
+                <a href="{{ url_for('login') }}" class="text-decoration-none">
+                    <i class="bi bi-arrow-left me-1"></i> Back to Login
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Countdown timer
+        function updateCountdown() {
+            const now = Math.floor(Date.now() / 1000);
+            const remaining = 30 - (now % 30);
+            document.getElementById('countdown').textContent = remaining;
+        }
+
+        updateCountdown();
+        setInterval(updateCountdown, 1000);
+
+        // Auto-submit when 6 digits entered
+        document.querySelector('input[name="totp_code"]').addEventListener('input', function(e) {
+            this.value = this.value.replace(/[^0-9]/g, '');
+            if (this.value.length === 6) {
+                // Optional: auto-submit
+                // this.form.submit();
+            }
+        });
+    </script>
+</body>
+</html>

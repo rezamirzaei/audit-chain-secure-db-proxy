@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Query Gateway{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        :root {
+            --dark-bg: #0f0f1a;
+            --card-bg: #1a1a2e;
+            --accent: #e94560;
+            --accent-light: #ff6b6b;
+            --text: #eaeaea;
+            --text-muted: #8892b0;
+            --success: #64ffda;
+            --border: rgba(255,255,255,0.1);
+        }
+
+        body {
+            background: var(--dark-bg);
+            color: var(--text);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            min-height: 100vh;
+        }
+
+        .navbar {
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 0;
+        }
+
+        .navbar-brand {
+            font-weight: 700;
+            font-size: 1.5rem;
+        }
+
+        .navbar-brand .icon {
+            color: var(--accent);
+        }
+
+        .nav-link {
+            color: var(--text-muted) !important;
+            padding: 0.5rem 1rem !important;
+            border-radius: 8px;
+            margin: 0 0.25rem;
+        }
+
+        .nav-link:hover, .nav-link.active {
+            color: var(--text) !important;
+            background: rgba(233, 69, 96, 0.2);
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+        }
+
+        .card-header {
+            background: transparent;
+            border-bottom: 1px solid var(--border);
+            font-weight: 600;
+        }
+
+        .btn-accent {
+            background: linear-gradient(135deg, var(--accent) 0%, #c23a51 100%);
+            color: white;
+            border: none;
+            padding: 0.6rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+        }
+
+        .btn-accent:hover {
+            background: linear-gradient(135deg, var(--accent-light) 0%, var(--accent) 100%);
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(233, 69, 96, 0.3);
+        }
+
+        .form-control {
+            background: rgba(0,0,0,0.3);
+            border: 2px solid var(--border);
+            color: var(--text);
+            border-radius: 8px;
+        }
+
+        .form-control:focus {
+            background: rgba(0,0,0,0.4);
+            border-color: var(--accent);
+            color: var(--text);
+            box-shadow: 0 0 0 3px rgba(233, 69, 96, 0.2);
+        }
+
+        .query-editor {
+            font-family: 'Fira Code', 'Monaco', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+            min-height: 200px;
+        }
+
+        .status-badge {
+            padding: 0.4rem 1rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .status-connected {
+            background: rgba(100, 255, 218, 0.2);
+            color: var(--success);
+        }
+
+        .status-disconnected {
+            background: rgba(233, 69, 96, 0.2);
+            color: var(--accent);
+        }
+
+        .table {
+            color: var(--text);
+        }
+
+        .table thead th {
+            background: rgba(233, 69, 96, 0.1);
+            color: var(--accent);
+            border-bottom: 2px solid var(--accent);
+            font-weight: 600;
+        }
+
+        .table tbody tr {
+            border-color: var(--border);
+        }
+
+        .table tbody tr:hover {
+            background: rgba(233, 69, 96, 0.05);
+        }
+
+        .hero-section {
+            padding: 4rem 0 3rem;
+            text-align: center;
+        }
+
+        .hero-section h1 {
+            font-size: 3rem;
+            font-weight: 800;
+            margin-bottom: 1rem;
+        }
+
+        .hero-section .highlight {
+            color: var(--accent);
+        }
+
+        .schema-card {
+            background: linear-gradient(135deg, rgba(233, 69, 96, 0.1) 0%, rgba(233, 69, 96, 0.05) 100%);
+            border: 1px solid var(--accent);
+            border-radius: 12px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .schema-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 20px rgba(233, 69, 96, 0.2);
+        }
+
+        .schema-card h6 {
+            color: var(--accent);
+            margin: 0;
+        }
+
+        .result-count {
+            background: var(--accent);
+            color: white;
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+        }
+
+        .footer {
+            background: var(--card-bg);
+            border-top: 1px solid var(--border);
+            padding: 1.5rem 0;
+            margin-top: 3rem;
+        }
+
+        code {
+            color: var(--accent);
+        }
+
+        pre {
+            background: rgba(0,0,0,0.4);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+
+        .alert-danger {
+            background: rgba(233, 69, 96, 0.2);
+            border: 1px solid var(--accent);
+            color: var(--accent-light);
+        }
+
+        .alert-success {
+            background: rgba(100, 255, 218, 0.2);
+            border: 1px solid var(--success);
+            color: var(--success);
+        }
+    </style>
+    {% block extra_styles %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <span class="icon"><i class="bi bi-terminal-fill"></i></span>
+                QueryGate
+            </a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav me-auto">
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'home' %}active{% endif %}" href="/">
+                            <i class="bi bi-house"></i> Home
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'connect' %}active{% endif %}" href="/connect">
+                            <i class="bi bi-plug"></i> Connection
+                        </a>
+                    </li>
+                    {% if status and status.has_credentials %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="/mirror/" target="_blank">
+                            <i class="bi bi-window"></i> Mirror Original UI
+                        </a>
+                    </li>
+                    {% endif %}
+                </ul>
+                <div>
+                    {% if status and status.has_credentials %}
+                        <span class="status-badge status-connected">
+                            <i class="bi bi-check-circle-fill"></i> Connected as {{ status.username }}
+                        </span>
+                    {% else %}
+                        <span class="status-badge status-disconnected">
+                            <i class="bi bi-x-circle-fill"></i> Not Connected
+                        </span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container py-4">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="footer text-center">
+        <div class="container">
+            <small class="text-muted">
+                QueryGate Proxy • For Educational Purposes Only
+            </small>
+        </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

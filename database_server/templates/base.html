@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Enterprise Database System{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #0d6efd;
+            --primary-dark: #0b5ed7;
+            --sidebar-bg: #212529;
+            --sidebar-hover: #343a40;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background-color: #f8f9fa;
+        }
+
+        .sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 100vh;
+            width: 260px;
+            background: linear-gradient(180deg, var(--sidebar-bg) 0%, #1a1d21 100%);
+            padding-top: 0;
+            z-index: 1000;
+        }
+
+        .sidebar-brand {
+            padding: 1.5rem 1.25rem;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            margin-bottom: 1rem;
+        }
+
+        .sidebar-brand h4 {
+            color: #fff;
+            margin: 0;
+            font-weight: 600;
+        }
+
+        .sidebar-brand small {
+            color: rgba(255,255,255,0.5);
+            font-size: 0.75rem;
+        }
+
+        .nav-link {
+            color: rgba(255,255,255,0.7);
+            padding: 0.75rem 1.25rem;
+            margin: 0.15rem 0.75rem;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            color: #fff;
+            background: var(--sidebar-hover);
+        }
+
+        .nav-link.active {
+            color: #fff;
+            background: var(--primary);
+        }
+
+        .nav-link i {
+            width: 24px;
+            margin-right: 10px;
+        }
+
+        .main-content {
+            margin-left: 260px;
+            padding: 2rem;
+            min-height: 100vh;
+        }
+
+        .top-bar {
+            background: #fff;
+            border-bottom: 1px solid #dee2e6;
+            padding: 1rem 2rem;
+            margin: -2rem -2rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card {
+            border: none;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            border-radius: 12px;
+        }
+
+        .card-header {
+            background: #fff;
+            border-bottom: 1px solid #eee;
+            font-weight: 600;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+            color: #fff;
+            border-radius: 12px;
+            padding: 1.5rem;
+        }
+
+        .stat-card.green {
+            background: linear-gradient(135deg, #198754 0%, #157347 100%);
+        }
+
+        .stat-card.orange {
+            background: linear-gradient(135deg, #fd7e14 0%, #e96b02 100%);
+        }
+
+        .stat-card.purple {
+            background: linear-gradient(135deg, #6f42c1 0%, #5a32a3 100%);
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        .table th {
+            font-weight: 600;
+            color: #495057;
+            border-top: none;
+        }
+
+        .badge-status {
+            padding: 0.4rem 0.8rem;
+            border-radius: 20px;
+            font-weight: 500;
+        }
+
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: var(--primary);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+        }
+
+        .query-editor {
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 14px;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+        }
+
+        .query-editor:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(13,110,253,0.15);
+        }
+
+        .server-badge {
+            background: #198754;
+            color: #fff;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .server-badge::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: #90EE90;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
+    {% block extra_styles %}{% endblock %}
+</head>
+<body>
+    {% if session.user_id %}
+    <!-- Sidebar -->
+    <nav class="sidebar">
+        <div class="sidebar-brand">
+            <h4><i class="bi bi-database-fill text-primary"></i> DataVault</h4>
+            <small>Enterprise Database System</small>
+        </div>
+
+        <ul class="nav flex-column">
+            <li class="nav-item">
+                <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">
+                    <i class="bi bi-speedometer2"></i> Dashboard
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.endpoint == 'employees' %}active{% endif %}" href="{{ url_for('employees') }}">
+                    <i class="bi bi-people"></i> Employees
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.endpoint == 'departments' %}active{% endif %}" href="{{ url_for('departments') }}">
+                    <i class="bi bi-building"></i> Departments
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.endpoint == 'projects' %}active{% endif %}" href="{{ url_for('projects') }}">
+                    <i class="bi bi-kanban"></i> Projects
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link {% if request.endpoint == 'query_page' %}active{% endif %}" href="{{ url_for('query_page') }}">
+                    <i class="bi bi-terminal"></i> Query Console
+                </a>
+            </li>
+            {% if session.role == 'admin' %}
+            <li class="nav-item mt-3">
+                <a class="nav-link {% if request.endpoint == 'audit_log_page' %}active{% endif %}" href="{{ url_for('audit_log_page') }}">
+                    <i class="bi bi-shield-check"></i> Audit Log
+                </a>
+            </li>
+            {% endif %}
+        </ul>
+
+        <div class="position-absolute bottom-0 w-100 p-3 border-top border-secondary">
+            <div class="d-flex align-items-center text-white-50 small">
+                <span class="server-badge me-2">Server Online</span>
+            </div>
+        </div>
+    </nav>
+    {% endif %}
+
+    <!-- Main Content -->
+    <main class="{% if session.user_id %}main-content{% endif %}">
+        {% if session.user_id %}
+        <div class="top-bar">
+            <div>
+                <h4 class="mb-0">{% block page_title %}Dashboard{% endblock %}</h4>
+            </div>
+            <div class="user-menu">
+                <span class="text-muted">Welcome, <strong>{{ session.username }}</strong></span>
+                <div class="user-avatar">{{ session.username[0]|upper }}</div>
+                <a href="{{ url_for('logout') }}" class="btn btn-outline-danger btn-sm">
+                    <i class="bi bi-box-arrow-right"></i> Logout
+                </a>
+            </div>
+        </div>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

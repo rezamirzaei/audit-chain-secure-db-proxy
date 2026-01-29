@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Projects - DataVault{% endblock %}
+{% block page_title %}Projects{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <i class="bi bi-kanban me-2"></i>All Projects
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Project Name</th>
+                        <th>Description</th>
+                        <th>Department</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for project in projects %}
+                    <tr>
+                        <td>{{ project.id }}</td>
+                        <td><strong>{{ project.name }}</strong></td>
+                        <td class="text-muted">{{ project.description[:50] }}{% if project.description|length > 50 %}...{% endif %}</td>
+                        <td>{{ project.department_name or 'N/A' }}</td>
+                        <td>
+                            <small>
+                                {{ project.start_date }} → {{ project.end_date }}
+                            </small>
+                        </td>
+                        <td>
+                            {% if project.status == 'active' %}
+                            <span class="badge bg-success badge-status">Active</span>
+                            {% elif project.status == 'completed' %}
+                            <span class="badge bg-primary badge-status">Completed</span>
+                            {% elif project.status == 'planning' %}
+                            <span class="badge bg-warning badge-status">Planning</span>
+                            {% else %}
+                            <span class="badge bg-secondary badge-status">{{ project.status }}</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

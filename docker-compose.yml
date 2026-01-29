@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  # Container 1: Database Server (HTTPS)
+  # Real SQLite database with MVC architecture and nice UI
+  # Multi-factor authentication: Password + TOTP 2FA + Security Question
+  # Runs on HTTPS with self-signed certificate
+  database-server:
+    build:
+      context: ./database_server
+      dockerfile: Dockerfile
+    container_name: database-server
+    ports:
+      - "5002:5000"
+    environment:
+      - FLASK_ENV=development
+      - SECRET_KEY=database-server-secret-key-change-in-production
+      - APP_ENV=demo
+      - ENABLE_TOTP_TEST_ENDPOINT=true
+      - ENABLE_QUERY_CONSOLE=true
+      - REDIS_URL=redis://redis:6379/0
+      - PORT=5000
+    volumes:
+      - db-data:/app/data
+    depends_on:
+      - redis
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-k", "-f", "https://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Container 2: Proxy Clone / Gateway
+  # - Own HOME interface for end users to write queries
+  # - Can clone/mirror the original database server UI dynamically
+  # - Stores credentials and session cookies (simulates breach)
+  # - Handles multi-step auth (password + 2FA + security question)
+  # - Connects to database server via HTTPS
+  proxy-clone:
+    build:
+      context: ./proxy_clone
+      dockerfile: Dockerfile
+    container_name: proxy-clone
+    ports:
+      - "8080:8080"
+    environment:
+      - FLASK_ENV=development
+      - SECRET_KEY=proxy-clone-secret-key-change-in-production
+      - APP_ENV=demo
+      - PROXY_FEATURES_ENABLED=true
+      - DATABASE_SERVER_URL=https://database-server:5000
+      - SSL_VERIFY=false
+      - REDIS_URL=redis://redis:6379/1
+    depends_on:
+      - database-server
+      - redis
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: demo-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  db-data:
