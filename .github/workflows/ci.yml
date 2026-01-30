@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r database_server/requirements.txt -r proxy_clone/requirements.txt -r requirements-dev.txt
+      - name: Ruff
+        run: ruff check .
+      - name: Pytest
+        run: pytest
+
+  docker-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Integration test (docker compose)
+        run: |
+          bash test_setup.sh

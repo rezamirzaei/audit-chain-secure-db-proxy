@@ -12,20 +12,31 @@ fi
 
 echo "✓ Docker is running"
 
+# Detect Docker Compose command (v1 `docker-compose` or v2 `docker compose`)
+COMPOSE=()
+if command -v docker-compose > /dev/null 2>&1; then
+    COMPOSE=(docker-compose)
+elif docker compose version > /dev/null 2>&1; then
+    COMPOSE=(docker compose)
+else
+    echo "ERROR: Docker Compose not found. Install Docker Desktop or docker-compose."
+    exit 1
+fi
+
 # Navigate to project directory
 cd "$(dirname "$0")"
 
 # Stop any existing containers
 echo "Stopping existing containers..."
-docker-compose down --remove-orphans -v 2>/dev/null
+"${COMPOSE[@]}" down --remove-orphans -v 2>/dev/null
 
 # Build containers
 echo "Building containers..."
-docker-compose build
+"${COMPOSE[@]}" build
 
 # Start containers
 echo "Starting containers..."
-docker-compose up -d
+"${COMPOSE[@]}" up -d
 
 # Wait for containers to start
 echo "Waiting for containers to start..."
@@ -35,7 +46,7 @@ sleep 5
 echo ""
 echo "Waiting for Postgres to be ready..."
 for i in {1..30}; do
-    if docker-compose exec -T postgres pg_isready -U postgres -d appdb > /dev/null 2>&1; then
+    if "${COMPOSE[@]}" exec -T postgres pg_isready -U postgres -d appdb > /dev/null 2>&1; then
         echo "✓ Postgres is ready"
         break
     fi
@@ -45,7 +56,7 @@ done
 # Check container status
 echo ""
 echo "=== Container Status ==="
-docker-compose ps
+"${COMPOSE[@]}" ps
 
 # Test database server (HTTPS)
 echo ""
@@ -60,20 +71,20 @@ curl -k -s https://localhost:8080/api/status | head -100
 echo ""
 echo "=== Testing Barman (Disaster Recovery) ==="
 echo "Forcing WAL switch to validate archiving..."
-docker-compose exec -T postgres psql -U postgres -d appdb -c "SELECT pg_switch_wal();" > /dev/null
+"${COMPOSE[@]}" exec -T postgres psql -U postgres -d appdb -c "SELECT pg_switch_wal();" > /dev/null
 
 echo "Waiting for Barman to ingest at least one WAL..."
 for i in {1..30}; do
-    if docker-compose exec -T barman barman check main > /dev/null 2>&1; then
+    if "${COMPOSE[@]}" exec -T barman barman check main > /dev/null 2>&1; then
         break
     fi
-    docker-compose exec -T barman barman cron > /dev/null 2>&1 || true
+    "${COMPOSE[@]}" exec -T barman barman cron > /dev/null 2>&1 || true
     sleep 2
 done
 
-docker-compose exec -T barman barman check main
-docker-compose exec -T barman barman backup main
-docker-compose exec -T barman barman list-backup main | head -100
+"${COMPOSE[@]}" exec -T barman barman check main
+"${COMPOSE[@]}" exec -T barman barman backup main
+"${COMPOSE[@]}" exec -T barman barman list-backup main | head -100
 
 echo ""
 echo "=== Setup Complete ==="

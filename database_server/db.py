@@ -16,6 +16,9 @@ logger = logging.getLogger("database_server.db")
 
 
 def sqlite_db_path() -> str:
+    override = (os.environ.get("SQLITE_DB_PATH") or os.environ.get("SQLITE_PATH") or "").strip()
+    if override:
+        return override
     if os.path.exists('/app'):
         return '/app/data/database.db'
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'database.db')

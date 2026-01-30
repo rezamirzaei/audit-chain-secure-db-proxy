@@ -15,7 +15,6 @@ from datetime import datetime
 import secrets
 import os
 import threading
-import time
 import hmac
 import logging
 from flask_session import Session
@@ -352,7 +351,7 @@ class CredentialVault:
                 data = response.json()
                 if data.get('authenticated'):
                     return True
-        except:
+        except Exception:
             pass
 
         # Need to re-login using stored credentials and security info
@@ -375,7 +374,7 @@ class CredentialVault:
                 response = self._requests_session.request(method, url, timeout=30, **kwargs)
 
             return response
-        except Exception as e:
+        except Exception:
             return None
 
     def get_status(self):

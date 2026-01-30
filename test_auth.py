@@ -12,8 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 def test_imports():
     """Test that all imports work"""
     try:
-        from flask import Flask
-        print("✓ Flask imported successfully")
+        import flask
+        print(f"✓ Flask imported successfully ({flask.__version__})")
     except ImportError as e:
         print(f"✗ Failed to import Flask: {e}")
         print("  Run: pip install flask")
@@ -21,7 +21,7 @@ def test_imports():
 
     try:
         import requests
-        print("✓ Requests imported successfully")
+        print(f"✓ Requests imported successfully ({requests.__version__})")
     except ImportError as e:
         print(f"✗ Failed to import requests: {e}")
         print("  Run: pip install requests")

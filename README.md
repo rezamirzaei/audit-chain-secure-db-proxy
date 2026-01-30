@@ -173,14 +173,23 @@ python database_server/verify_audit_chain.py
 
 ## Disaster Recovery (PostgreSQL + Barman)
 
-The Docker stack includes:
-- `postgres` (primary database)
-- `barman` (backup server) configured for streaming base backups + WAL streaming
-- WAL archiving is enabled via PostgreSQL `archive_command` (shared `wal-archive` volume in this demo)
+This repo ships a working **PostgreSQL + Barman** setup to support the full DR lifecycle:
+**regular backups**, **WAL archiving**, and **point-in-time restore (PITR)**.
+
+In the Docker stack:
+- `postgres` = primary database (the app connects here)
+- `barman` = backup server (takes base backups + stores WAL for PITR)
+- WAL archiving is enabled via PostgreSQL `archive_command` in `docker-compose.yml` and stored on a shared `wal-archive` volume (demo-friendly).
+
+Notes:
+- The app uses Postgres by default when `DATABASE_URL` is set; otherwise it falls back to SQLite.
+- `pg_basebackup` does **not** copy config files outside `PGDATA`. In this repo `pg_hba.conf` is mounted separately, so Barman will warn about it during backup (expected).
 
 Common commands:
 
 ```bash
+# Use `docker compose` instead of `docker-compose` if you're on Compose v2
+
 # Validate configuration/connectivity
 docker-compose exec barman barman check main
 
@@ -189,14 +198,28 @@ docker-compose exec barman barman backup main
 
 # List available backups
 docker-compose exec barman barman list-backup main
+
+# (Optional) force a WAL switch then let Barman ingest it
+docker-compose exec postgres psql -U postgres -d appdb -c "SELECT pg_switch_wal();"
+docker-compose exec barman barman cron
 ```
 
-Recovery (high-level):
-1. Stop the application and database.
-2. Use `barman recover` to restore the selected backup into a fresh Postgres data directory.
-3. Start a new Postgres instance pointing at the recovered data directory, then point the app to it.
+Recovery (PITR, high-level):
+1. Pick a backup id: `docker-compose exec barman barman list-backup main`
+2. Optionally create a restore point on the primary:
+   `docker-compose exec postgres psql -U postgres -d appdb -c "SELECT pg_create_restore_point('my_point');"`
+3. Recover: `docker-compose exec barman barman recover --target-name my_point --target-action promote main <BACKUP_ID> <DEST_DIR>`
+4. Start a new Postgres instance pointing at `<DEST_DIR>`, then repoint the app to it.
 
-For a hands-on verification, run `./test_setup.sh` (it includes a Barman `check` + `backup`).
+Hands-on verification:
+- `./test_setup.sh` runs a Barman `check` + `backup`.
+- `bash scripts/dr_restore_drill.sh` runs an end-to-end PITR drill:
+  - takes a backup
+  - creates a restore point
+  - writes a marker row after the restore point
+  - restores to the restore point
+  - asserts the marker row is **absent** in the recovered database
+  - use `KEEP_RESTORED=1` to keep the recovered Postgres container running on `localhost:55432`
 
 ### Container 2: Proxy Clone
 - **Own HOME Interface** (QueryGate) - dark themed, modern UI

@@ -18,11 +18,8 @@ import redis as redis_lib
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from auth_utils import (
-    generate_totp_secret,
     get_totp_token,
     verify_totp,
-    _hash_value,
-    _is_hash,
     _verify_and_upgrade,
 )
 from db import connect_db, init_db as init_database, list_tables as db_list_tables, table_columns as db_table_columns
