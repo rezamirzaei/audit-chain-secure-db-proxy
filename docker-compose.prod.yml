@@ -1,4 +1,61 @@
 services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: prod-postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=appdb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - wal-archive:/wal_archive
+    command:
+      - postgres
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=test ! -f /wal_archive/%f && (cp %p /wal_archive/%f && chmod 0644 /wal_archive/%f)
+      - -c
+      - wal_level=replica
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+      - -c
+      - wal_keep_size=64MB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d appdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app-network
+
+  barman:
+    build:
+      context: ./barman
+      dockerfile: Dockerfile
+    container_name: prod-barman
+    environment:
+      - BARMAN_SERVER_NAME=main
+      - BARMAN_PG_HOST=postgres
+      - BARMAN_PG_PORT=5432
+      - BARMAN_PG_DBNAME=appdb
+      - BARMAN_PG_USER=barman
+      - BARMAN_PG_PASSWORD=barman_password
+      - BARMAN_RETENTION_POLICY=RECOVERY WINDOW OF 7 DAYS
+    volumes:
+      - barman-data:/var/lib/barman
+      - wal-archive:/wal_archive
+    depends_on:
+      - postgres
+    networks:
+      - app-network
+
   database-server:
     build:
       context: ./database_server
@@ -9,6 +66,7 @@ services:
       - SECRET_KEY=database-server-secret-key-change-in-production
       - PORT=5000
       - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgresql://app:app_password@postgres:5432/appdb
       - ENABLE_TOTP_TEST_ENDPOINT=false
       - ENABLE_QUERY_CONSOLE=false
       - TRUST_PROXY=true
@@ -17,6 +75,7 @@ services:
     expose:
       - "5000"
     depends_on:
+      - postgres
       - redis
     networks:
       - app-network
@@ -71,3 +130,6 @@ networks:
 
 volumes:
   db-data:
+  postgres-data:
+  barman-data:
+  wal-archive:

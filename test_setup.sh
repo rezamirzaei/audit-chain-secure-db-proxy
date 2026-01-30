@@ -1,5 +1,6 @@
 #!/bin/bash
 # Test script to verify the setup
+set -euo pipefail
 
 echo "=== Testing Database Server & Proxy Clone Setup ==="
 
@@ -16,7 +17,7 @@ cd "$(dirname "$0")"
 
 # Stop any existing containers
 echo "Stopping existing containers..."
-docker-compose down --remove-orphans 2>/dev/null
+docker-compose down --remove-orphans -v 2>/dev/null
 
 # Build containers
 echo "Building containers..."
@@ -29,6 +30,17 @@ docker-compose up -d
 # Wait for containers to start
 echo "Waiting for containers to start..."
 sleep 5
+
+# Wait for Postgres
+echo ""
+echo "Waiting for Postgres to be ready..."
+for i in {1..30}; do
+    if docker-compose exec -T postgres pg_isready -U postgres -d appdb > /dev/null 2>&1; then
+        echo "✓ Postgres is ready"
+        break
+    fi
+    sleep 1
+done
 
 # Check container status
 echo ""
@@ -44,6 +56,24 @@ curl -k -s https://localhost:5002/api/health | head -100
 echo ""
 echo "=== Testing Proxy ==="
 curl -k -s https://localhost:8080/api/status | head -100
+
+echo ""
+echo "=== Testing Barman (Disaster Recovery) ==="
+echo "Forcing WAL switch to validate archiving..."
+docker-compose exec -T postgres psql -U postgres -d appdb -c "SELECT pg_switch_wal();" > /dev/null
+
+echo "Waiting for Barman to ingest at least one WAL..."
+for i in {1..30}; do
+    if docker-compose exec -T barman barman check main > /dev/null 2>&1; then
+        break
+    fi
+    docker-compose exec -T barman barman cron > /dev/null 2>&1 || true
+    sleep 2
+done
+
+docker-compose exec -T barman barman check main
+docker-compose exec -T barman barman backup main
+docker-compose exec -T barman barman list-backup main | head -100
 
 echo ""
 echo "=== Setup Complete ==="

@@ -52,7 +52,7 @@ In **demo mode**, the proxy captures credentials by:
 │  │  Full MVC Architecture                                          ││
 │  │                                                                  ││
 │  │  ┌────────────┐ ┌────────────┐ ┌──────────────────────────────┐ ││
-│  │  │   Views    │ │ Controller │ │         Model (SQLite)       │ ││
+│  │  │   Views    │ │ Controller │ │     Model (PostgreSQL/SQLite)│ ││
 │  │  │            │ │   (Flask)  │ │                              │ ││
 │  │  │ • Login    │ │            │ │  Tables:                     │ ││
 │  │  │ • Dashboard│ │ • Auth     │ │  • employees                 │ ││
@@ -152,7 +152,7 @@ python database_server/verify_audit_chain.py
 
 ### Container 1: Database Server
 - **HTTPS with SSL/TLS** - Self-signed certificate for secure communication
-- **Real SQLite Database** with persistent storage
+- **PostgreSQL (Docker default)** with persistent storage *(SQLite fallback for local/dev)*
 - **MVC Architecture** with proper separation of concerns
 - **Beautiful UI** with Bootstrap 5 and sidebar navigation
 - **Password & Security Answer Hashing** (Argon2)
@@ -167,8 +167,36 @@ python database_server/verify_audit_chain.py
 - **Server-side sessions** via Redis (Flask-Session)
 - **Audit Logging** of all queries and actions
 - **Tamper‑evident audit chain** (hash‑linked entries)
+- **Disaster Recovery (Barman)** - streaming backups + WAL for point-in-time restore (PITR)
 - **Query Console** for running SQL queries
 - **Pages**: Login, 2FA Verify, Security Question, Dashboard, Employees, Departments, Projects, Audit Log
+
+## Disaster Recovery (PostgreSQL + Barman)
+
+The Docker stack includes:
+- `postgres` (primary database)
+- `barman` (backup server) configured for streaming base backups + WAL streaming
+- WAL archiving is enabled via PostgreSQL `archive_command` (shared `wal-archive` volume in this demo)
+
+Common commands:
+
+```bash
+# Validate configuration/connectivity
+docker-compose exec barman barman check main
+
+# Take a base backup
+docker-compose exec barman barman backup main
+
+# List available backups
+docker-compose exec barman barman list-backup main
+```
+
+Recovery (high-level):
+1. Stop the application and database.
+2. Use `barman recover` to restore the selected backup into a fresh Postgres data directory.
+3. Start a new Postgres instance pointing at the recovered data directory, then point the app to it.
+
+For a hands-on verification, run `./test_setup.sh` (it includes a Barman `check` + `backup`).
 
 ### Container 2: Proxy Clone
 - **Own HOME Interface** (QueryGate) - dark themed, modern UI

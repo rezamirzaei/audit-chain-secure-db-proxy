@@ -7,20 +7,25 @@ and multi-factor authentication (password + TOTP 2FA)
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, g, abort
 from functools import wraps
 from datetime import datetime, timedelta
-import sqlite3
 import secrets
 import os
 import hmac
 import hashlib
-import struct
 import time
-import base64
 import logging
-from werkzeug.security import generate_password_hash, check_password_hash
 from flask_session import Session
 import redis as redis_lib
-from argon2 import PasswordHasher, exceptions as argon2_exceptions
 from werkzeug.middleware.proxy_fix import ProxyFix
+
+from auth_utils import (
+    generate_totp_secret,
+    get_totp_token,
+    verify_totp,
+    _hash_value,
+    _is_hash,
+    _verify_and_upgrade,
+)
+from db import connect_db, init_db as init_database, list_tables as db_list_tables, table_columns as db_table_columns
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
@@ -152,124 +157,12 @@ def set_security_headers(response):
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     return response
 
-# Database path - use /app/data in Docker, local 'data' folder otherwise
-if os.path.exists('/app'):
-    DATABASE = '/app/data/database.db'
-else:
-    # Local development - use a 'data' folder in the script directory
-    DATABASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'database.db')
-
-
-# ==================== TOTP (Time-based One-Time Password) Implementation ====================
-
-def generate_totp_secret():
-    """Generate a random TOTP secret"""
-    return base64.b32encode(secrets.token_bytes(20)).decode('utf-8')
-
-
-def get_totp_token(secret, time_step=30):
-    """Generate current TOTP token"""
-    # Decode the base32 secret
-    key = base64.b32decode(secret.upper() + '=' * ((8 - len(secret) % 8) % 8))
-
-    # Get current time step
-    counter = int(time.time() // time_step)
-
-    # Pack counter as big-endian 8-byte integer
-    counter_bytes = struct.pack('>Q', counter)
-
-    # Generate HMAC-SHA1
-    hmac_hash = hmac.new(key, counter_bytes, hashlib.sha1).digest()
-
-    # Dynamic truncation
-    offset = hmac_hash[-1] & 0x0F
-    code = struct.unpack('>I', hmac_hash[offset:offset + 4])[0]
-    code = (code & 0x7FFFFFFF) % 1000000
-
-    return str(code).zfill(6)
-
-
-def verify_totp(secret, token, window=1):
-    """Verify TOTP token with time window tolerance"""
-    for i in range(-window, window + 1):
-        # Check tokens from (current - window) to (current + window) time steps
-        counter = int(time.time() // 30) + i
-
-        key = base64.b32decode(secret.upper() + '=' * ((8 - len(secret) % 8) % 8))
-        counter_bytes = struct.pack('>Q', counter)
-        hmac_hash = hmac.new(key, counter_bytes, hashlib.sha1).digest()
-
-        offset = hmac_hash[-1] & 0x0F
-        code = struct.unpack('>I', hmac_hash[offset:offset + 4])[0]
-        code = (code & 0x7FFFFFFF) % 1000000
-        expected = str(code).zfill(6)
-
-        if token == expected:
-            return True
-    return False
-
-
-def get_totp_uri(secret, username, issuer="DataVault"):
-    """Generate otpauth URI for QR code"""
-    return f"otpauth://totp/{issuer}:{username}?secret={secret}&issuer={issuer}"
-
-
-_password_hasher = PasswordHasher()
-
-
-def _is_hash(value):
-    if not value:
-        return False
-    return value.startswith(('pbkdf2:', 'scrypt:', 'argon2:', '$argon2'))
-
-
-def _is_argon2(value):
-    return bool(value) and value.startswith('$argon2')
-
-
-def _hash_value(value):
-    return _password_hasher.hash(value)
-
-
-def _verify_value(stored, provided):
-    if stored is None or provided is None:
-        return False, False
-
-    if _is_argon2(stored):
-        try:
-            ok = _password_hasher.verify(stored, provided)
-            return ok, _password_hasher.check_needs_rehash(stored) if ok else False
-        except argon2_exceptions.VerifyMismatchError:
-            return False, False
-        except Exception:
-            return False, False
-
-    if _is_hash(stored):
-        ok = check_password_hash(stored, provided)
-        return ok, ok
-
-    ok = hmac.compare_digest(stored, provided)
-    return ok, ok
-
-
-def _verify_and_upgrade(db, user_id, field, stored, provided):
-    ok, needs_upgrade = _verify_value(stored, provided)
-    if ok and needs_upgrade:
-        db.execute(
-            f"UPDATE auth_users SET {field} = ? WHERE id = ?",
-            (_hash_value(provided), user_id)
-        )
-        db.commit()
-    return ok
-
-
 def get_db():
     """Get database connection"""
     db = getattr(g, '_database', None)
     if db is None:
-        os.makedirs(os.path.dirname(DATABASE), exist_ok=True)
-        db = g._database = sqlite3.connect(DATABASE)
-        db.row_factory = sqlite3.Row
+        # Per-request connection; schema is created at startup.
+        db = g._database = connect_db(retries=1)
     return db
 
 
@@ -278,225 +171,6 @@ def close_connection(exception):
     db = getattr(g, '_database', None)
     if db is not None:
         db.close()
-
-
-def init_db():
-    """Initialize database with tables and sample data"""
-    db = get_db()
-    cursor = db.cursor()
-
-    # Create users table for authentication with 2FA support
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS auth_users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            role TEXT DEFAULT 'user',
-            totp_secret TEXT,
-            totp_enabled BOOLEAN DEFAULT 1,
-            security_question TEXT,
-            security_answer TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-
-    # Ensure auth_users has all required columns (for existing DBs)
-    cursor.execute("PRAGMA table_info(auth_users)")
-    existing_cols = {row[1] for row in cursor.fetchall()}
-    required_cols = {
-        'role': "TEXT DEFAULT 'user'",
-        'totp_secret': "TEXT",
-        'totp_enabled': "BOOLEAN DEFAULT 1",
-        'security_question': "TEXT",
-        'security_answer': "TEXT",
-        'created_at': "TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
-    }
-    for col, definition in required_cols.items():
-        if col not in existing_cols:
-            cursor.execute(f"ALTER TABLE auth_users ADD COLUMN {col} {definition}")
-
-    # Create sample data tables
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS employees (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT UNIQUE,
-            department TEXT,
-            salary REAL,
-            hire_date DATE,
-            is_active BOOLEAN DEFAULT 1
-        )
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS departments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            budget REAL,
-            manager_id INTEGER,
-            FOREIGN KEY (manager_id) REFERENCES employees(id)
-        )
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS projects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            description TEXT,
-            department_id INTEGER,
-            start_date DATE,
-            end_date DATE,
-            status TEXT DEFAULT 'active',
-            FOREIGN KEY (department_id) REFERENCES departments(id)
-        )
-    ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS audit_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            action TEXT,
-            table_name TEXT,
-            query TEXT,
-            prev_hash TEXT,
-            entry_hash TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-
-    # Ensure audit_log has tamper-evident hash columns
-    cursor.execute("PRAGMA table_info(audit_log)")
-    audit_cols = {row[1] for row in cursor.fetchall()}
-    if 'prev_hash' not in audit_cols:
-        cursor.execute("ALTER TABLE audit_log ADD COLUMN prev_hash TEXT")
-    if 'entry_hash' not in audit_cols:
-        cursor.execute("ALTER TABLE audit_log ADD COLUMN entry_hash TEXT")
-
-    # Backfill audit hashes for existing rows
-    cursor.execute("SELECT id, user_id, action, table_name, query, timestamp, entry_hash FROM audit_log ORDER BY id")
-    rows = cursor.fetchall()
-    if rows and any(row['entry_hash'] is None for row in rows):
-        prev_hash = ''
-        for row in rows:
-            payload = f"{prev_hash}|{row['timestamp']}|{row['user_id']}|{row['action']}|{row['table_name'] or ''}|{row['query'] or ''}"
-            entry_hash = hashlib.sha256(payload.encode('utf-8')).hexdigest()
-            cursor.execute(
-                "UPDATE audit_log SET prev_hash = ?, entry_hash = ? WHERE id = ?",
-                (prev_hash, entry_hash, row['id'])
-            )
-            prev_hash = entry_hash
-
-    # Insert default admin user if not exists (with 2FA)
-    cursor.execute("SELECT COUNT(*) FROM auth_users WHERE username = 'admin'")
-    if cursor.fetchone()[0] == 0:
-        # Generate TOTP secrets for users
-        admin_secret = generate_totp_secret()
-        analyst_secret = generate_totp_secret()
-        admin_password = _hash_value('SecurePass123!')
-        analyst_password = _hash_value('AnalystPass456!')
-        admin_answer = _hash_value('blue')
-        analyst_answer = _hash_value('fluffy')
-
-        cursor.execute("""
-            INSERT INTO auth_users (username, password, role, totp_secret, totp_enabled, security_question, security_answer) 
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, ('admin', admin_password, 'admin', admin_secret, 1, 'What is your favorite color?', admin_answer))
-
-        cursor.execute("""
-            INSERT INTO auth_users (username, password, role, totp_secret, totp_enabled, security_question, security_answer) 
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, ('analyst', analyst_password, 'analyst', analyst_secret, 1, 'What is your pet name?', analyst_answer))
-
-        # Print TOTP secrets for testing (in real app, this would be shown to user during setup)
-        if DEMO_MODE or ENABLE_TOTP_TEST_ENDPOINT:
-            logger.info("=== 2FA SETUP ===")
-            logger.info("Admin TOTP Secret: %s", admin_secret)
-            logger.info("Admin Current Token: %s", get_totp_token(admin_secret))
-            logger.info("Analyst TOTP Secret: %s", analyst_secret)
-            logger.info("Analyst Current Token: %s", get_totp_token(analyst_secret))
-            logger.info("==================")
-    else:
-        # Ensure existing users have required security data and TOTP secrets
-        cursor.execute("UPDATE auth_users SET totp_enabled = 1 WHERE totp_enabled IS NULL")
-
-        # Populate missing TOTP secrets
-        cursor.execute("SELECT id, username FROM auth_users WHERE totp_secret IS NULL OR totp_secret = ''")
-        missing_totp = cursor.fetchall()
-        for user_id, username in missing_totp:
-            secret = generate_totp_secret()
-            cursor.execute("UPDATE auth_users SET totp_secret = ? WHERE id = ?", (secret, user_id))
-            if DEMO_MODE:
-                logger.info("[MIGRATION] Generated TOTP secret for %s: %s", username, secret)
-
-        # Populate missing security questions/answers for default users
-        cursor.execute("SELECT id, username, password, security_question, security_answer FROM auth_users")
-        for user_id, username, password, question, answer in cursor.fetchall():
-            # Hash plaintext passwords
-            if password and not _is_hash(password):
-                cursor.execute(
-                    "UPDATE auth_users SET password = ? WHERE id = ?",
-                    (_hash_value(password), user_id)
-                )
-
-            # Ensure default security questions/answers are set and hashed
-            if username == 'admin' and (not question or not answer):
-                cursor.execute(
-                    "UPDATE auth_users SET security_question = ?, security_answer = ? WHERE id = ?",
-                    ('What is your favorite color?', _hash_value('blue'), user_id)
-                )
-            elif username == 'analyst' and (not question or not answer):
-                cursor.execute(
-                    "UPDATE auth_users SET security_question = ?, security_answer = ? WHERE id = ?",
-                    ('What is your pet name?', _hash_value('fluffy'), user_id)
-                )
-            elif answer and not _is_hash(answer):
-                cursor.execute(
-                    "UPDATE auth_users SET security_answer = ? WHERE id = ?",
-                    (_hash_value(answer.lower()), user_id)
-                )
-
-    # Insert sample data if not exists
-    cursor.execute("SELECT COUNT(*) FROM departments")
-    if cursor.fetchone()[0] == 0:
-        departments = [
-            ('Engineering', 500000, None),
-            ('Marketing', 200000, None),
-            ('Sales', 300000, None),
-            ('Human Resources', 150000, None),
-            ('Finance', 250000, None)
-        ]
-        cursor.executemany("INSERT INTO departments (name, budget, manager_id) VALUES (?, ?, ?)", departments)
-
-        employees = [
-            ('John Smith', 'john.smith@company.com', 'Engineering', 95000, '2020-01-15', 1),
-            ('Sarah Johnson', 'sarah.j@company.com', 'Engineering', 105000, '2019-06-01', 1),
-            ('Mike Wilson', 'mike.w@company.com', 'Marketing', 75000, '2021-03-20', 1),
-            ('Emily Davis', 'emily.d@company.com', 'Sales', 85000, '2020-08-10', 1),
-            ('Robert Brown', 'robert.b@company.com', 'Finance', 90000, '2018-11-05', 1),
-            ('Lisa Anderson', 'lisa.a@company.com', 'Human Resources', 70000, '2021-01-10', 1),
-            ('David Martinez', 'david.m@company.com', 'Engineering', 115000, '2017-04-22', 1),
-            ('Jennifer Taylor', 'jennifer.t@company.com', 'Marketing', 80000, '2020-09-15', 1),
-            ('James Thomas', 'james.t@company.com', 'Sales', 95000, '2019-02-28', 1),
-            ('Amanda White', 'amanda.w@company.com', 'Finance', 100000, '2018-07-01', 1),
-        ]
-        cursor.executemany(
-            "INSERT INTO employees (name, email, department, salary, hire_date, is_active) VALUES (?, ?, ?, ?, ?, ?)",
-            employees
-        )
-
-        projects = [
-            ('Website Redesign', 'Complete overhaul of company website', 1, '2024-01-01', '2024-06-30', 'active'),
-            ('Mobile App', 'Develop iOS and Android apps', 1, '2024-03-01', '2024-12-31', 'active'),
-            ('Q1 Campaign', 'Spring marketing campaign', 2, '2024-01-15', '2024-03-31', 'completed'),
-            ('Sales Expansion', 'Expand to new markets', 3, '2024-02-01', '2024-08-31', 'active'),
-            ('HR System', 'New HR management system', 4, '2024-04-01', '2024-10-31', 'planning'),
-        ]
-        cursor.executemany(
-            "INSERT INTO projects (name, description, department_id, start_date, end_date, status) VALUES (?, ?, ?, ?, ?, ?)",
-            projects
-        )
-
-    db.commit()
 
 
 def login_required(f):
@@ -712,7 +386,7 @@ def dashboard():
         'employees': db.execute("SELECT COUNT(*) FROM employees").fetchone()[0],
         'departments': db.execute("SELECT COUNT(*) FROM departments").fetchone()[0],
         'projects': db.execute("SELECT COUNT(*) FROM projects WHERE status = 'active'").fetchone()[0],
-        'total_salary': db.execute("SELECT SUM(salary) FROM employees WHERE is_active = 1").fetchone()[0] or 0
+        'total_salary': db.execute("SELECT SUM(salary) FROM employees WHERE is_active = ?", (True,)).fetchone()[0] or 0
     }
 
     recent_employees = db.execute(
@@ -993,19 +667,16 @@ def api_tables():
     if not ENABLE_QUERY_CONSOLE:
         return jsonify({'error': 'Query console disabled'}), 403
     db = get_db()
-    tables = db.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'auth_users'"
-    ).fetchall()
+    tables = db_list_tables(db)
 
     result = []
-    for table in tables:
-        table_name = table['name']
+    for table_name in tables:
         count = db.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-        columns = db.execute(f"PRAGMA table_info({table_name})").fetchall()
+        columns = db_table_columns(db, table_name)
         result.append({
             'name': table_name,
             'row_count': count,
-            'columns': [{'name': col['name'], 'type': col['type']} for col in columns]
+            'columns': columns
         })
 
     return jsonify({'tables': result})
@@ -1023,17 +694,17 @@ def api_query():
     if not query:
         return jsonify({'error': 'No query provided'}), 400
 
-    # Security: Only allow SELECT queries
+    db = get_db()
     query_lower = query.lower()
-    if not query_lower.startswith('select') and not query_lower.startswith('pragma'):
-        return jsonify({'error': 'Only SELECT queries are allowed'}), 403
+    allowed_prefixes = ('select', 'pragma') if db.backend == 'sqlite' else ('select', 'show')
+    if not query_lower.startswith(allowed_prefixes):
+        return jsonify({'error': f"Only {', '.join(allowed_prefixes).upper()} queries are allowed"}), 403
 
     # Block access to auth_users table
     if 'auth_users' in query_lower:
         return jsonify({'error': 'Access denied to this table'}), 403
 
     try:
-        db = get_db()
         cursor = db.execute(query)
         columns = [description[0] for description in cursor.description] if cursor.description else []
         rows = cursor.fetchall()
@@ -1064,6 +735,8 @@ def api_table_data(table_name):
 
     try:
         db = get_db()
+        if table_name not in db_list_tables(db):
+            return jsonify({'error': 'Table not found'}), 404
 
         # Get total count
         total = db.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
@@ -1113,7 +786,14 @@ def api_audit_verify():
 
 # Initialize database on startup
 with app.app_context():
-    init_db()
+    bootstrap_db = connect_db(retries=int(os.environ.get("DB_CONNECT_RETRIES", "30")))
+    init_database(
+        bootstrap_db,
+        demo_mode=DEMO_MODE,
+        enable_totp_test_endpoint=ENABLE_TOTP_TEST_ENDPOINT,
+        log_info=logger.info,
+    )
+    bootstrap_db.close()
 
 
 if __name__ == '__main__':

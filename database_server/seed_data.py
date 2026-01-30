@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """Idempotent seed script for demo data."""
 import os
-import sqlite3
-from datetime import datetime
 
+from db import connect_db, init_db
 
-def db_path() -> str:
-    if os.path.exists('/app'):
-        return '/app/data/database.db'
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'database.db')
+def _log_info(msg: str, *args) -> None:
+    if args:
+        try:
+            msg = msg % args
+        except Exception:
+            msg = f"{msg} {args}"
+    print(msg)
 
 
 def main() -> None:
-    path = db_path()
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    conn = sqlite3.connect(path)
-    cur = conn.cursor()
+    retries = int(os.environ.get("DB_CONNECT_RETRIES", "30"))
+    db = connect_db(retries=retries)
+    init_db(db, demo_mode=True, enable_totp_test_endpoint=True, log_info=_log_info)
 
     # Departments
     departments = [
@@ -28,9 +29,8 @@ def main() -> None:
 
     dept_added = 0
     for name, budget, manager_id in departments:
-        cur.execute("SELECT 1 FROM departments WHERE name = ?", (name,))
-        if cur.fetchone() is None:
-            cur.execute(
+        if db.execute("SELECT 1 FROM departments WHERE name = ?", (name,)).fetchone() is None:
+            db.execute(
                 "INSERT INTO departments (name, budget, manager_id) VALUES (?, ?, ?)",
                 (name, budget, manager_id),
             )
@@ -38,27 +38,26 @@ def main() -> None:
 
     # Employees
     employees = [
-        ('Priya Patel', 'priya.patel@company.com', 'Research', 120000, '2019-05-12', 1),
-        ('Carlos Diaz', 'carlos.diaz@company.com', 'Operations', 72000, '2022-02-10', 1),
-        ('Hannah Lee', 'hannah.lee@company.com', 'Customer Success', 68000, '2021-11-03', 1),
-        ('Omar Hassan', 'omar.hassan@company.com', 'IT Support', 78000, '2020-09-17', 1),
-        ('Grace Kim', 'grace.kim@company.com', 'Legal', 115000, '2018-03-25', 1),
-        ('Mina Zhao', 'mina.zhao@company.com', 'Research', 132000, '2017-07-08', 1),
+        ('Priya Patel', 'priya.patel@company.com', 'Research', 120000, '2019-05-12', True),
+        ('Carlos Diaz', 'carlos.diaz@company.com', 'Operations', 72000, '2022-02-10', True),
+        ('Hannah Lee', 'hannah.lee@company.com', 'Customer Success', 68000, '2021-11-03', True),
+        ('Omar Hassan', 'omar.hassan@company.com', 'IT Support', 78000, '2020-09-17', True),
+        ('Grace Kim', 'grace.kim@company.com', 'Legal', 115000, '2018-03-25', True),
+        ('Mina Zhao', 'mina.zhao@company.com', 'Research', 132000, '2017-07-08', True),
     ]
 
     emp_added = 0
     for name, email, dept, salary, hire_date, is_active in employees:
-        cur.execute("SELECT 1 FROM employees WHERE email = ?", (email,))
-        if cur.fetchone() is None:
-            cur.execute(
+        if db.execute("SELECT 1 FROM employees WHERE email = ?", (email,)).fetchone() is None:
+            db.execute(
                 "INSERT INTO employees (name, email, department, salary, hire_date, is_active) VALUES (?, ?, ?, ?, ?, ?)",
                 (name, email, dept, salary, hire_date, is_active),
             )
             emp_added += 1
 
     # Projects (lookup department_id)
-    cur.execute("SELECT id, name FROM departments")
-    dept_map = {name: dept_id for dept_id, name in cur.fetchall()}
+    dept_rows = db.execute("SELECT id, name FROM departments").fetchall()
+    dept_map = {row["name"]: row["id"] for row in dept_rows}
 
     projects = [
         ('AI Forecasting', 'Predictive analytics for sales and staffing', 'Research', '2024-05-01', '2025-01-31', 'active'),
@@ -70,19 +69,19 @@ def main() -> None:
 
     proj_added = 0
     for name, description, dept_name, start_date, end_date, status in projects:
-        cur.execute("SELECT 1 FROM projects WHERE name = ?", (name,))
-        if cur.fetchone() is not None:
+        if db.execute("SELECT 1 FROM projects WHERE name = ?", (name,)).fetchone() is not None:
             continue
         dept_id = dept_map.get(dept_name)
         if dept_id is None:
             continue
-        cur.execute(
+        db.execute(
             "INSERT INTO projects (name, description, department_id, start_date, end_date, status) VALUES (?, ?, ?, ?, ?, ?)",
             (name, description, dept_id, start_date, end_date, status),
         )
         proj_added += 1
 
-    conn.commit()
+    db.commit()
+    db.close()
     print(f"Seed complete. Added departments={dept_added}, employees={emp_added}, projects={proj_added}")
 
 
