@@ -6,22 +6,19 @@ and multi-factor authentication (password + TOTP 2FA)
 
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, g, abort
 from functools import wraps
-from datetime import datetime, timedelta
-import secrets
+from datetime import datetime
 import os
 import hmac
 import time
 import logging
+import secrets
 from typing import Any, cast
-
-from cachelib.file import FileSystemCache
-from flask_session import Session
-import redis as redis_lib
-from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import func, select
 from sqlalchemy.orm import aliased
 
 from .auth_utils import PasswordService, TotpService
+from .bootstrap import AppBootstrap
+from .config import AppConfig
 from .db import DatabaseSessionManager, init_db as init_database
 from .api_schemas import (
     LoginApiRequest,
@@ -39,81 +36,26 @@ from .api_blueprint import create_api_blueprint
 from .services import AuditService, QueryService, SchemaService, TableService, UserService
 from .models import AuthUser, AuditLog, Department, Employee, Project
 
-app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
-app.config['SESSION_COOKIE_NAME'] = 'db_session'
-app.config['SESSION_COOKIE_HTTPONLY'] = True
+config = AppConfig.from_env()
+bootstrap = AppBootstrap(config)
+app = bootstrap.create_app()
 
-# Environment / feature flags
-APP_ENV = os.environ.get('APP_ENV', 'production').lower()
-DEMO_MODE = APP_ENV != 'production'
-DEBUG_MODE = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
-trust_proxy_env = os.environ.get('TRUST_PROXY')
-if trust_proxy_env is None:
-    TRUST_PROXY = APP_ENV == 'production'
-else:
-    TRUST_PROXY = trust_proxy_env.lower() == 'true'
-
-if TRUST_PROXY:
-    setattr(app, "wsgi_app", ProxyFix(cast(Any, app.wsgi_app), x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1))
-enable_totp_test_endpoint_env = os.environ.get('ENABLE_TOTP_TEST_ENDPOINT')
-if enable_totp_test_endpoint_env is None:
-    ENABLE_TOTP_TEST_ENDPOINT = DEMO_MODE
-else:
-    ENABLE_TOTP_TEST_ENDPOINT = enable_totp_test_endpoint_env.lower() == 'true'
-
-enable_query_console_env = os.environ.get('ENABLE_QUERY_CONSOLE')
-if enable_query_console_env is None:
-    ENABLE_QUERY_CONSOLE = DEMO_MODE
-else:
-    ENABLE_QUERY_CONSOLE = enable_query_console_env.lower() == 'true'
-
-def _ssl_cert_available():
-    cert_paths = [
-        '/app/certs/cert.pem',
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'certs', 'cert.pem'),
-    ]
-    key_paths = [
-        '/app/certs/key.pem',
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), 'certs', 'key.pem'),
-    ]
-    return any(os.path.exists(p) for p in cert_paths) and any(os.path.exists(p) for p in key_paths)
-
-cookie_secure_env = os.environ.get('SESSION_COOKIE_SECURE')
-if cookie_secure_env is None:
-    app.config['SESSION_COOKIE_SECURE'] = APP_ENV == 'production' or _ssl_cert_available()
-else:
-    app.config['SESSION_COOKIE_SECURE'] = cookie_secure_env.lower() == 'true'
-app.config['SESSION_COOKIE_SAMESITE'] = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax')
-if APP_ENV == 'production':
-    app.config['PREFERRED_URL_SCHEME'] = 'https'
-
-# Logging
-logging.basicConfig(level=os.environ.get('LOG_LEVEL', 'INFO'))
+logging.basicConfig(level=config.log_level)
 logger = logging.getLogger("database_server")
+
+DEMO_MODE = config.demo_mode
+DEBUG_MODE = config.debug_mode
+ENABLE_TOTP_TEST_ENDPOINT = config.enable_totp_test_endpoint
+ENABLE_QUERY_CONSOLE = config.enable_query_console
 
 # Database session manager (SQLAlchemy)
 db_manager = DatabaseSessionManager.from_env()
 password_service = PasswordService()
 totp_service = TotpService()
 
-# Server-side sessions (Redis preferred)
-REDIS_URL = os.environ.get('REDIS_URL')
-if REDIS_URL:
-    app.config['SESSION_TYPE'] = 'redis'
-    app.config['SESSION_REDIS'] = redis_lib.from_url(REDIS_URL)
-    app.config['SESSION_KEY_PREFIX'] = os.environ.get('SESSION_KEY_PREFIX', 'db_session:')
-else:
-    session_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'sessions')
-    os.makedirs(session_dir, exist_ok=True)
-    app.config['SESSION_TYPE'] = 'cachelib'
-    app.config['SESSION_CACHELIB'] = FileSystemCache(cache_dir=session_dir)
-Session(app)
-
 # Basic in-memory rate limiting (per-process)
-RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get('RATE_LIMIT_WINDOW_SECONDS', '600'))
-RATE_LIMIT_MAX_ATTEMPTS = int(os.environ.get('RATE_LIMIT_MAX_ATTEMPTS', '5'))
+RATE_LIMIT_WINDOW_SECONDS = config.rate_limit_window_seconds
+RATE_LIMIT_MAX_ATTEMPTS = config.rate_limit_max_attempts
 _RATE_LIMITS: dict[str, dict[str, list[float]]] = {"login": {}}
 
 
