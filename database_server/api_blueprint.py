@@ -5,6 +5,9 @@ import time
 from typing import Any
 
 from flask import Blueprint, jsonify, request, session
+from sqlalchemy import select
+
+from .models import AuthUser
 
 
 def create_api_blueprint(deps: dict[str, Any]) -> Blueprint:
@@ -56,12 +59,14 @@ def create_api_blueprint(deps: dict[str, Any]) -> Blueprint:
             return jsonify({"error": "Not found"}), 404
 
         username = request.args.get("username", "admin")
-        db = deps["get_db"]()
-        user = db.execute("SELECT totp_secret FROM auth_users WHERE username = ?", (username,)).fetchone()
-        if user and user["totp_secret"]:
+        db_session = deps["get_db"]()
+        secret = db_session.execute(
+            select(AuthUser.totp_secret).where(AuthUser.username == username)
+        ).scalar_one_or_none()
+        if secret:
             payload = totp_response_model(
                 username=username,
-                totp_token=deps["get_totp_token"](user["totp_secret"]),
+                totp_token=deps["get_totp_token"](secret),
                 valid_for_seconds=30 - (int(time.time()) % 30),
             )
             return jsonify(payload.model_dump(mode="json"))
@@ -109,7 +114,6 @@ def create_api_blueprint(deps: dict[str, Any]) -> Blueprint:
     def api_audit_verify():
         if session.get("role") != "admin":
             return jsonify({"error": "Forbidden"}), 403
-        valid, info = deps["verify_audit_chain"]()
-        return jsonify(deps["api_service_factory"]().audit_verify(valid, info))
+        return jsonify(deps["api_service_factory"]().audit_verify())
 
     return bp

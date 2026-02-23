@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 import secrets
 import os
 import hmac
-import hashlib
 import time
 import logging
 from typing import Any, cast
@@ -19,9 +18,11 @@ from cachelib.file import FileSystemCache
 from flask_session import Session
 import redis as redis_lib
 from werkzeug.middleware.proxy_fix import ProxyFix
+from sqlalchemy import func, select
+from sqlalchemy.orm import aliased
 
-from .auth_utils import get_totp_token, verify_totp, _verify_and_upgrade
-from .db import connect_db, init_db as init_database, list_tables as db_list_tables, table_columns as db_table_columns
+from .auth_utils import PasswordService, TotpService
+from .db import DatabaseSessionManager, init_db as init_database
 from .api_schemas import (
     LoginApiRequest,
     QueryApiRequest,
@@ -35,6 +36,8 @@ from .api_schemas import (
 from .api_validation import RequestValidator, RequestPayloadValidationError
 from .api_services import DatabaseApiService
 from .api_blueprint import create_api_blueprint
+from .services import AuditService, QueryService, SchemaService, TableService, UserService
+from .models import AuthUser, AuditLog, Department, Employee, Project
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
@@ -89,6 +92,11 @@ if APP_ENV == 'production':
 # Logging
 logging.basicConfig(level=os.environ.get('LOG_LEVEL', 'INFO'))
 logger = logging.getLogger("database_server")
+
+# Database session manager (SQLAlchemy)
+db_manager = DatabaseSessionManager.from_env()
+password_service = PasswordService()
+totp_service = TotpService()
 
 # Server-side sessions (Redis preferred)
 REDIS_URL = os.environ.get('REDIS_URL')
@@ -170,24 +178,26 @@ def handle_request_payload_validation_error(error):
     return jsonify({'error': 'Invalid request payload', 'details': error.errors}), 400
 
 def get_db():
-    """Get database connection"""
-    db = getattr(g, '_database', None)
-    if db is None:
-        # Per-request connection; schema is created at startup.
-        db = g._database = connect_db(retries=1)
-    return db
+    """Get SQLAlchemy session for this request."""
+    db_session = getattr(g, '_db_session', None)
+    if db_session is None:
+        db_session = g._db_session = db_manager.session()
+    return db_session
 
 
 def _api_service() -> Any:
+    db_session = get_db()
     return DatabaseApiService(
         session_store=cast(Any, session),
-        get_db=get_db,
-        db_list_tables=db_list_tables,
-        db_table_columns=db_table_columns,
-        verify_totp=verify_totp,
-        verify_and_upgrade=_verify_and_upgrade,
+        db_session=db_session,
+        user_service=UserService(db_session),
+        audit_service=AuditService(db_session),
+        schema_service=SchemaService(db_manager.engine),
+        query_service=QueryService(db_session),
+        table_service=TableService(db_session),
+        password_service=password_service,
+        totp_service=totp_service,
         complete_login=complete_login,
-        log_action=log_action,
         is_rate_limited=_is_rate_limited,
         record_failed_attempt=_record_failed_attempt,
         enable_query_console=ENABLE_QUERY_CONSOLE,
@@ -196,9 +206,9 @@ def _api_service() -> Any:
 
 @app.teardown_appcontext
 def close_connection(exception):
-    db = getattr(g, '_database', None)
-    if db is not None:
-        db.close()
+    db_session = getattr(g, '_db_session', None)
+    if db_session is not None:
+        db_session.close()
 
 
 def login_required(f):
@@ -216,19 +226,13 @@ def login_required(f):
 def log_action(action, table_name=None, query=None):
     """Log user actions for audit"""
     if 'user_id' in session:
-        db = get_db()
-        prev_row = db.execute(
-            "SELECT entry_hash FROM audit_log ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        prev_hash = prev_row['entry_hash'] if prev_row and prev_row['entry_hash'] else ''
-        ts = datetime.utcnow().isoformat()
-        payload = f"{prev_hash}|{ts}|{session['user_id']}|{action}|{table_name or ''}|{query or ''}"
-        entry_hash = hashlib.sha256(payload.encode('utf-8')).hexdigest()
-        db.execute(
-            "INSERT INTO audit_log (user_id, action, table_name, query, prev_hash, entry_hash, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (session['user_id'], action, table_name, query, prev_hash, entry_hash, ts)
+        service = _api_service()
+        service.audit_service.log_action(
+            user_id=session['user_id'],
+            action=action,
+            table_name=table_name,
+            query=query,
         )
-        db.commit()
 
 
 # ==================== Views (Templates served) ====================
@@ -254,26 +258,24 @@ def login():
         username = request.form.get('username')
         password = request.form.get('password')
 
-        db = get_db()
-        user = db.execute(
-            "SELECT * FROM auth_users WHERE username = ?",
-            (username,)
-        ).fetchone()
+        db_session = get_db()
+        user_service = UserService(db_session)
+        user = user_service.get_by_username(username or "")
 
-        if user and _verify_and_upgrade(db, user['id'], 'password', user['password'], password):
+        if user and password_service.verify_and_upgrade(db_session, user, "password", password):
             # Store pending auth in session for 2FA/security verification
-            session['pending_user_id'] = user['id']
-            session['pending_username'] = user['username']
-            session['pending_role'] = user['role']
-            session['pending_totp_enabled'] = user['totp_enabled']
+            session['pending_user_id'] = user.id
+            session['pending_username'] = user.username
+            session['pending_role'] = user.role
+            session['pending_totp_enabled'] = user.totp_enabled
             session['auth_step'] = 'password_verified'
 
             # Step 2: 2FA if enabled
-            if user['totp_enabled']:
+            if user.totp_enabled:
                 return redirect(url_for('verify_2fa'))
 
             # Step 3: Security question if configured
-            if user['security_question']:
+            if user.security_question:
                 return redirect(url_for('verify_security'))
 
             # No additional steps required
@@ -300,11 +302,9 @@ def verify_2fa():
             return render_template('verify_2fa.html', error=error,
                                   username=session.get('pending_username'))
 
-        db = get_db()
-        user = db.execute(
-            "SELECT totp_secret, security_question FROM auth_users WHERE id = ?",
-            (session.get('pending_user_id'),)
-        ).fetchone()
+        db_session = get_db()
+        user_service = UserService(db_session)
+        user = user_service.get_by_id(int(session.get('pending_user_id')))
         if not user:
             return redirect(url_for('login'))
 
@@ -314,11 +314,11 @@ def verify_2fa():
         if not totp_code or not totp_code.isdigit() or len(totp_code) != 6:
             error = 'Authentication code must be exactly 6 digits.'
         else:
-            if verify_totp(user['totp_secret'], totp_code):
+            if user.totp_secret and totp_service.verify(user.totp_secret, totp_code):
                 session['auth_step'] = 'totp_verified'
 
                 # Proceed to security question if configured
-                if user['security_question']:
+                if user.security_question:
                     return redirect(url_for('verify_security'))
 
                 # No security question, complete login
@@ -340,15 +340,13 @@ def verify_security():
         return redirect(url_for('login'))
 
     error = None
-    db = get_db()
-    user = db.execute(
-        "SELECT security_question, security_answer FROM auth_users WHERE id = ?",
-        (session.get('pending_user_id'),)
-    ).fetchone()
+    db_session = get_db()
+    user_service = UserService(db_session)
+    user = user_service.get_by_id(int(session.get('pending_user_id')))
     if not user:
         return redirect(url_for('login'))
 
-    question = user['security_question']
+    question = user.security_question
 
     # If no security question is configured, complete login
     if not question:
@@ -363,10 +361,8 @@ def verify_security():
                                   username=session.get('pending_username'))
 
         answer = request.form.get('security_answer', '').strip()
-        expected = user['security_answer'] or ''
-
         answer_norm = answer.lower()
-        if _verify_and_upgrade(db, session.get('pending_user_id'), 'security_answer', expected, answer_norm):
+        if password_service.verify_and_upgrade(db_session, user, 'security_answer', answer_norm):
             complete_login()
             return redirect(url_for('dashboard'))
         else:
@@ -408,18 +404,22 @@ def logout():
 @login_required
 def dashboard():
     """Main dashboard"""
-    db = get_db()
+    db_session = get_db()
 
     stats = {
-        'employees': db.execute("SELECT COUNT(*) FROM employees").fetchone()[0],
-        'departments': db.execute("SELECT COUNT(*) FROM departments").fetchone()[0],
-        'projects': db.execute("SELECT COUNT(*) FROM projects WHERE status = 'active'").fetchone()[0],
-        'total_salary': db.execute("SELECT SUM(salary) FROM employees WHERE is_active = ?", (True,)).fetchone()[0] or 0
+        'employees': db_session.execute(select(func.count(Employee.id))).scalar_one(),
+        'departments': db_session.execute(select(func.count(Department.id))).scalar_one(),
+        'projects': db_session.execute(
+            select(func.count(Project.id)).where(Project.status == 'active')
+        ).scalar_one(),
+        'total_salary': db_session.execute(
+            select(func.sum(Employee.salary)).where(Employee.is_active.is_(True))
+        ).scalar_one() or 0,
     }
 
-    recent_employees = db.execute(
-        "SELECT * FROM employees ORDER BY hire_date DESC LIMIT 5"
-    ).fetchall()
+    recent_employees = db_session.execute(
+        select(Employee).order_by(Employee.hire_date.desc()).limit(5)
+    ).scalars().all()
 
     return render_template('dashboard.html', stats=stats, recent_employees=recent_employees)
 
@@ -428,8 +428,12 @@ def dashboard():
 @login_required
 def employees():
     """Employees list page"""
-    db = get_db()
-    employees_list = db.execute("SELECT * FROM employees ORDER BY name").fetchall()
+    db_session = get_db()
+    dept_filter = request.args.get('dept')
+    stmt = select(Employee).order_by(Employee.name)
+    if dept_filter:
+        stmt = stmt.where(Employee.department == dept_filter)
+    employees_list = db_session.execute(stmt).scalars().all()
     return render_template('employees.html', employees=employees_list)
 
 
@@ -437,28 +441,56 @@ def employees():
 @login_required
 def departments():
     """Departments list page"""
-    db = get_db()
-    depts = db.execute("""
-        SELECT d.*, COUNT(e.id) as employee_count 
-        FROM departments d 
-        LEFT JOIN employees e ON d.name = e.department 
-        GROUP BY d.id
-    """).fetchall()
-    return render_template('departments.html', departments=depts)
+    db_session = get_db()
+    employee_alias = aliased(Employee)
+    rows = db_session.execute(
+        select(
+            Department,
+            func.count(employee_alias.id).label("employee_count"),
+        )
+        .outerjoin(employee_alias, Department.name == employee_alias.department)
+        .group_by(Department.id)
+        .order_by(Department.name)
+    ).all()
+    departments_payload = [
+        {
+            "id": dept.id,
+            "name": dept.name,
+            "budget": dept.budget or 0,
+            "employee_count": int(employee_count or 0),
+        }
+        for dept, employee_count in rows
+    ]
+    return render_template('departments.html', departments=departments_payload)
 
 
 @app.route('/projects')
 @login_required
 def projects():
     """Projects list page"""
-    db = get_db()
-    projects_list = db.execute("""
-        SELECT p.*, d.name as department_name 
-        FROM projects p 
-        LEFT JOIN departments d ON p.department_id = d.id
-        ORDER BY p.start_date DESC
-    """).fetchall()
-    return render_template('projects.html', projects=projects_list)
+    db_session = get_db()
+    dept_alias = aliased(Department)
+    rows = db_session.execute(
+        select(
+            Project,
+            dept_alias.name.label("department_name"),
+        )
+        .outerjoin(dept_alias, Project.department_id == dept_alias.id)
+        .order_by(Project.start_date.desc())
+    ).all()
+    projects_payload = [
+        {
+            "id": project.id,
+            "name": project.name,
+            "description": project.description or "",
+            "department_name": department_name,
+            "start_date": project.start_date,
+            "end_date": project.end_date,
+            "status": project.status,
+        }
+        for project, department_name in rows
+    ]
+    return render_template('projects.html', projects=projects_payload)
 
 
 @app.route('/query')
@@ -477,31 +509,25 @@ def audit_log_page():
     if session.get('role') != 'admin':
         return redirect(url_for('dashboard'))
 
-    db = get_db()
-    logs = db.execute("""
-        SELECT a.*, u.username 
-        FROM audit_log a 
-        LEFT JOIN auth_users u ON a.user_id = u.id 
-        ORDER BY a.timestamp DESC 
-        LIMIT 100
-    """).fetchall()
+    db_session = get_db()
+    rows = db_session.execute(
+        select(AuditLog, AuthUser.username)
+        .outerjoin(AuthUser, AuditLog.user_id == AuthUser.id)
+        .order_by(AuditLog.timestamp.desc())
+        .limit(100)
+    ).all()
+    logs = [
+        {
+            "id": log.id,
+            "username": username,
+            "action": log.action,
+            "table_name": log.table_name,
+            "query": log.query,
+            "timestamp": log.timestamp,
+        }
+        for log, username in rows
+    ]
     return render_template('audit.html', logs=logs)
-
-
-def verify_audit_chain():
-    """Verify tamper-evident audit hash chain"""
-    db = get_db()
-    rows = db.execute(
-        "SELECT id, user_id, action, table_name, query, prev_hash, entry_hash, timestamp FROM audit_log ORDER BY id"
-    ).fetchall()
-    prev_hash = ''
-    for row in rows:
-        payload = f"{prev_hash}|{row['timestamp']}|{row['user_id']}|{row['action']}|{row['table_name'] or ''}|{row['query'] or ''}"
-        expected = hashlib.sha256(payload.encode('utf-8')).hexdigest()
-        if row['entry_hash'] != expected:
-            return False, {'id': row['id'], 'expected': expected, 'actual': row['entry_hash']}
-        prev_hash = row['entry_hash'] or ''
-    return True, None
 
 
 app.register_blueprint(
@@ -519,10 +545,9 @@ app.register_blueprint(
             'api_service_factory': _api_service,
             'enable_totp_test_endpoint': ENABLE_TOTP_TEST_ENDPOINT,
             'get_db': get_db,
-            'get_totp_token': get_totp_token,
+            'get_totp_token': totp_service.get_token,
             'login_required': login_required,
             'log_action': log_action,
-            'verify_audit_chain': verify_audit_chain,
         }
     )
 )
@@ -530,14 +555,12 @@ app.register_blueprint(
 
 # Initialize database on startup
 with app.app_context():
-    bootstrap_db = connect_db(retries=int(os.environ.get("DB_CONNECT_RETRIES", "30")))
     init_database(
-        bootstrap_db,
+        db_manager,
         demo_mode=DEMO_MODE,
         enable_totp_test_endpoint=ENABLE_TOTP_TEST_ENDPOINT,
         log_info=logger.info,
     )
-    bootstrap_db.close()
 
 
 def create_app() -> Flask:

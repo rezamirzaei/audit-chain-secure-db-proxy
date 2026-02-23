@@ -91,9 +91,42 @@ def _verify_value(stored: str, provided: str) -> tuple[bool, bool]:
     return compare_ok, compare_ok
 
 
-def _verify_and_upgrade(db, user_id: int, field: str, stored: str, provided: str) -> bool:
-    ok, needs_upgrade = _verify_value(stored, provided)
-    if ok and needs_upgrade:
-        db.execute(f"UPDATE auth_users SET {field} = ? WHERE id = ?", (_hash_value(provided), user_id))
-        db.commit()
-    return ok
+class PasswordService:
+    """Encapsulates password hashing and upgrade rules."""
+
+    @staticmethod
+    def is_hash(value: str) -> bool:
+        return _is_hash(value)
+
+    @staticmethod
+    def hash_value(value: str) -> str:
+        return _hash_value(value)
+
+    @staticmethod
+    def verify_value(stored: str, provided: str) -> tuple[bool, bool]:
+        return _verify_value(stored, provided)
+
+    def verify_and_upgrade(self, session, user, field: str, provided: str) -> bool:
+        stored = getattr(user, field)
+        ok, needs_upgrade = _verify_value(stored, provided)
+        if ok and needs_upgrade:
+            setattr(user, field, _hash_value(provided))
+            session.add(user)
+            session.commit()
+        return ok
+
+
+class TotpService:
+    """Encapsulates TOTP operations."""
+
+    @staticmethod
+    def generate_secret() -> str:
+        return generate_totp_secret()
+
+    @staticmethod
+    def get_token(secret: str, time_step: int = 30) -> str:
+        return get_totp_token(secret, time_step=time_step)
+
+    @staticmethod
+    def verify(secret: str, token: str, window: int = 1) -> bool:
+        return verify_totp(secret, token, window=window)
