@@ -7,7 +7,7 @@ Container 2: Proxy Gateway (demo mode optional)
 - Connects to database server via HTTPS
 """
 
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for, Response, abort
+from flask import Flask, request, jsonify, session, redirect, url_for, abort
 from functools import wraps
 import secrets
 import os
@@ -22,6 +22,7 @@ from .api_blueprint import create_api_blueprint
 from .runtime import ProxyCloneRuntime
 from .state.credential_vault import CredentialVault
 from .state.vault_registry import VaultRegistry
+from .web_routes import register_web_routes
 
 runtime = ProxyCloneRuntime()
 app = runtime.app
@@ -134,192 +135,17 @@ def proxy_status_available(f):
     return decorated_function
 
 
-# ==================== HOME Interface (Proxy's own UI) ====================
-
-@app.route('/')
-def home():
-    """Proxy's home page - query interface for end users"""
-    if not runtime.config.proxy_features_enabled:
-        return jsonify({'error': 'Proxy demo features are disabled in production'}), 404
-    status = vault.get_status()
-    return render_template('home.html', status=status)
-
-
-@app.route('/connect', methods=['GET', 'POST'])
-@feature_enabled
-def connect():
-    """Page to capture/enter credentials - handles multi-step auth"""
-    error = None
-    status = vault.get_status()
-
-    # Get step from URL args (GET) or form (POST)
-    if request.method == 'GET':
-        step = request.args.get('step', 'credentials')
-    else:
-        step = request.form.get('step', 'credentials')
-
-    # Debug logging
-    _debug("connect() called - method=%s, step=%s", request.method, step)
-    _debug("vault.auth_state = %s", vault.auth_state)
-    _debug("vault.credentials = %s", bool(vault.credentials))
-
-    if step in ['totp', 'security'] and not vault.credentials:
-        return redirect(url_for('connect', step='credentials'))
-
-    if request.method == 'POST':
-        if step == 'credentials':
-            username = request.form.get('username')
-            password = request.form.get('password')
-
-            # Store the credentials (this is the "breach")
-            vault.store_credentials(username, password)
-
-            # Reset auth state for fresh login
-            vault.auth_state = {}
-
-            # Try to login - Step 1
-            result = vault.login()
-            _debug("credentials login result: %s", result)
-
-            if result.get('success'):
-                return redirect(url_for('home'))
-            elif result.get('requires_totp'):
-                # Need 2FA code - redirect to step 2
-                _debug("Redirecting to totp step, auth_state = %s", vault.auth_state)
-                return redirect(url_for('connect', step='totp'))
-            elif result.get('requires_security'):
-                # Need security answer - redirect to step 3
-                session['security_question'] = result.get('security_question')
-                return redirect(url_for('connect', step='security'))
-            else:
-                error = result.get('error', 'Failed to connect')
-
-        elif step == 'totp':
-            totp_code = request.form.get('totp_code', '').strip()
-            _debug("totp step - totp_code=%s, auth_state=%s", totp_code, vault.auth_state)
-
-            # Server-side validation: require 6 digits
-            if not totp_code:
-                error = 'Please enter the 2FA code'
-            elif not totp_code.isdigit() or len(totp_code) != 6:
-                error = '2FA code must be exactly 6 digits'
-            else:
-                # Continue auth with TOTP - Step 2
-                result = vault.login(totp_code=totp_code)
-                _debug("totp login result: %s", result)
-
-                if result.get('success'):
-                    return redirect(url_for('home'))
-                elif result.get('requires_security'):
-                    session['security_question'] = result.get('security_question')
-                    return redirect(url_for('connect', step='security'))
-                else:
-                    error = result.get('error', 'Invalid 2FA code')
-                    # Stay on TOTP step to retry
-
-        elif step == 'security':
-            security_answer = request.form.get('security_answer', '').strip()
-
-            if not security_answer:
-                error = 'Please enter your security answer'
-            else:
-                # Continue auth with security answer - Step 3
-                result = vault.login(security_answer=security_answer)
-                _debug("security login result: %s", result)
-
-                if result.get('success'):
-                    return redirect(url_for('home'))
-                else:
-                    error = result.get('error', 'Invalid security answer')
-                    # Stay on security step to retry
-
-    # Get security question from session or vault
-    security_question = session.get('security_question') or vault.auth_state.get('security_question')
-
-    return render_template('connect.html',
-                          error=error,
-                          status=status,
-                          step=step,
-                          security_question=security_question)
-
-
-@app.route('/disconnect', methods=['POST'])
-@feature_enabled
-def disconnect():
-    """Clear stored credentials and all captured auth info"""
-    vault.reset_auth(clear_credentials=True)
-    _drop_current_vault()
-    session.pop('security_question', None)
-    return redirect(url_for('connect'))
-
-
-# ==================== Clone/Mirror Original UI ====================
-
-@app.route('/mirror/')
-@app.route('/mirror/<path:path>')
-@feature_enabled
-@proxy_authenticated
-def mirror(path=''):
-    """
-    Mirror/Clone the original database server UI dynamically.
-    Fetches pages from the database server and serves them through the proxy.
-    """
-    # Proxy the request to the database server
-    response = vault.proxy_request('GET', f'/{path}')
-
-    if response is None:
-        return "Failed to connect to database server", 503
-
-    # Get the content
-    content = response.content
-    content_type = response.headers.get('Content-Type', 'text/html')
-
-    # If it's HTML, we can optionally modify it (add proxy banner, etc.)
-    if 'text/html' in content_type:
-        content = content.decode('utf-8')
-
-        # Add a banner to show this is the mirrored version
-        banner = '''
-        <div style="position:fixed;top:0;left:0;right:0;background:linear-gradient(90deg,#dc3545,#c82333);
-                    color:white;text-align:center;padding:8px;z-index:9999;font-size:14px;">
-            <i class="bi bi-shield-exclamation"></i>
-            <strong>PROXY MIRROR</strong> - You are viewing through the proxy gateway
-            <a href="/" style="color:white;margin-left:20px;">← Back to Proxy Home</a>
-        </div>
-        <style>body{margin-top:40px !important;}.sidebar{top:40px !important;height:calc(100vh - 40px) !important;}</style>
-        '''
-
-        # Insert banner after <body> tag
-        content = content.replace('<body>', f'<body>{banner}')
-
-        # Rewrite links to go through the mirror
-        content = content.replace('href="/', 'href="/mirror/')
-        content = content.replace("href='/", "href='/mirror/")
-        content = content.replace('action="/', 'action="/mirror/')
-
-        content = content.encode('utf-8')
-
-    return Response(content, content_type=content_type, status=response.status_code)
-
-
-@app.route('/mirror/api/<path:path>', methods=['GET', 'POST'])
-@feature_enabled
-@proxy_authenticated
-def mirror_api(path):
-    """Mirror API calls to the database server"""
-    if request.method == 'POST':
-        response = vault.proxy_request('POST', f'/api/{path}', json=request.get_json())
-    else:
-        response = vault.proxy_request('GET', f'/api/{path}')
-
-    if response is None:
-        return jsonify({'error': 'Failed to connect to database server'}), 503
-
-    return Response(
-        response.content,
-        content_type=response.headers.get('Content-Type'),
-        status=response.status_code
-    )
+register_web_routes(
+    app,
+    {
+        "vault": vault,
+        "feature_enabled": feature_enabled,
+        "proxy_authenticated": proxy_authenticated,
+        "drop_current_vault": _drop_current_vault,
+        "debug": _debug,
+        "proxy_features_enabled": runtime.config.proxy_features_enabled,
+    },
+)
 
 
 app.register_blueprint(
