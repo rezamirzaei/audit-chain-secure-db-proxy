@@ -49,6 +49,7 @@ def _load_sibling_module(module_name: str):
 _api_schemas_module = _load_sibling_module("api_schemas")
 _api_validation_module = _load_sibling_module("api_validation")
 _api_services_module = _load_sibling_module("api_services")
+_api_blueprint_module = _load_sibling_module("api_blueprint")
 
 ConnectApiRequest = _api_schemas_module.ConnectApiRequest
 QueryApiRequest = _api_schemas_module.QueryApiRequest
@@ -56,6 +57,7 @@ TablePathParams = _api_schemas_module.TablePathParams
 RequestValidator = _api_validation_module.RequestValidator
 RequestPayloadValidationError = _api_validation_module.RequestPayloadValidationError
 ProxyApiService = _api_services_module.ProxyApiService
+create_api_blueprint = _api_blueprint_module.create_api_blueprint
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
@@ -693,84 +695,20 @@ def mirror_api(path):
     )
 
 
-# ==================== Proxy's Own API ====================
-
-@app.route('/api/health')
-@feature_enabled
-def api_health():
-    """Minimal health endpoint with no sensitive state."""
-    return jsonify(_proxy_api_service().health())
-
-
-@app.route('/api/status')
-@feature_enabled
-@proxy_status_available
-def api_status():
-    """Get proxy status"""
-    return jsonify(_proxy_api_service().status())
-
-
-@app.route('/api/connect', methods=['POST'])
-@feature_enabled
-def api_connect():
-    """API endpoint to connect with credentials"""
-    payload = RequestValidator.parse_json(request, ConnectApiRequest)
-    body, status = _proxy_api_service().connect(payload)
-    return jsonify(body), status
-
-
-@app.route('/api/query', methods=['POST'])
-@feature_enabled
-def api_query():
-    """Execute query through the proxy"""
-    if not vault.ensure_session():
-        return jsonify({'error': 'Not connected to database server'}), 401
-
-    payload = RequestValidator.parse_json(request, QueryApiRequest)
-    query = payload.query
-
-    response = vault.proxy_request('POST', '/api/query', json={'query': query})
-
-    if response is None:
-        return jsonify({'error': 'Failed to connect to database server'}), 503
-
-    return Response(
-        response.content,
-        content_type='application/json',
-        status=response.status_code
+app.register_blueprint(
+    create_api_blueprint(
+        {
+            'request_validator': RequestValidator,
+            'connect_request_model': ConnectApiRequest,
+            'query_request_model': QueryApiRequest,
+            'table_path_model': TablePathParams,
+            'api_service_factory': _proxy_api_service,
+            'feature_enabled': feature_enabled,
+            'proxy_status_available': proxy_status_available,
+            'vault': vault,
+        }
     )
-
-
-@app.route('/api/tables')
-@feature_enabled
-def api_tables():
-    """Get tables through the proxy"""
-    if not vault.ensure_session():
-        return jsonify({'error': 'Not connected'}), 401
-
-    response = vault.proxy_request('GET', '/api/tables')
-
-    if response is None:
-        return jsonify({'error': 'Failed to connect'}), 503
-
-    return Response(response.content, content_type='application/json')
-
-
-@app.route('/api/table/<table_name>')
-@feature_enabled
-def api_table_data(table_name):
-    """Get table data through the proxy"""
-    if not vault.ensure_session():
-        return jsonify({'error': 'Not connected'}), 401
-
-    path_params = RequestValidator.parse_mapping({'table_name': table_name}, TablePathParams, source='path')
-
-    response = vault.proxy_request('GET', f'/api/table/{path_params.table_name}')
-
-    if response is None:
-        return jsonify({'error': 'Failed to connect'}), 503
-
-    return Response(response.content, content_type='application/json')
+)
 
 
 if __name__ == '__main__':

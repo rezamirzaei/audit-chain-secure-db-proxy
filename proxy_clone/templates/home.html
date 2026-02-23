@@ -4,8 +4,8 @@
 
 {% block content %}
 <div id="proxy-home-app"
-     data-api-query-url="{{ url_for('api_query') }}"
-     data-api-tables-url="{{ url_for('api_tables') }}"
+     data-api-query-url="{{ url_for('proxy_api.api_query') }}"
+     data-api-tables-url="{{ url_for('proxy_api.api_tables') }}"
      data-load-schema="{{ 'true' if status.has_credentials else 'false' }}">
 <div class="hero-section">
     <h1>Welcome to <span class="highlight">QueryGate</span></h1>
