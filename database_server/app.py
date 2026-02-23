@@ -4,15 +4,13 @@ A real database application with MVC architecture, SQLite database,
 and multi-factor authentication (password + TOTP 2FA)
 """
 
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for, g, abort
+from flask import Flask, request, jsonify, session, redirect, url_for, g, abort
 from functools import wraps
 from datetime import datetime
 import os
 import hmac
 import secrets
 from typing import Any, cast
-from sqlalchemy import func, select
-from sqlalchemy.orm import aliased
 
 from .db import init_db as init_database
 from .api_schemas import (
@@ -29,30 +27,30 @@ from .api_validation import RequestValidator, RequestPayloadValidationError
 from .api_services import DatabaseApiService
 from .api_blueprint import create_api_blueprint
 from .services import AuditService, QueryService, SchemaService, TableService, UserService
-from .models import AuthUser, AuditLog, Department, Employee, Project
 from .runtime import DatabaseServerRuntime
+from .web_routes import DatabaseWebRoutes
 
 runtime = DatabaseServerRuntime()
 app = runtime.app
 logger = runtime.logger
 
 
-def _client_ip():
+def client_ip():
     # ProxyFix normalizes REMOTE_ADDR from trusted forwarded headers.
     return request.remote_addr or 'unknown'
 
 
-def _is_rate_limited(bucket):
-    ip = _client_ip()
+def is_rate_limited(bucket):
+    ip = client_ip()
     return runtime.rate_limiter.is_limited(bucket, ip)
 
 
-def _record_failed_attempt(bucket):
-    ip = _client_ip()
+def record_failed_attempt(bucket):
+    ip = client_ip()
     runtime.rate_limiter.record_failure(bucket, ip)
 
 
-def _ensure_csrf_token():
+def ensure_csrf_token():
     token = session.get('csrf_token')
     if not token:
         token = secrets.token_urlsafe(32)
@@ -62,7 +60,7 @@ def _ensure_csrf_token():
 
 @app.context_processor
 def inject_csrf_token():
-    return {'csrf_token': _ensure_csrf_token()}
+    return {'csrf_token': ensure_csrf_token()}
 
 
 @app.before_request
@@ -100,7 +98,7 @@ def get_db():
     return db_session
 
 
-def _api_service() -> Any:
+def api_service() -> Any:
     db_session = get_db()
     return DatabaseApiService(
         session_store=cast(Any, session),
@@ -113,8 +111,8 @@ def _api_service() -> Any:
         password_service=runtime.password_service,
         totp_service=runtime.totp_service,
         complete_login=complete_login,
-        is_rate_limited=_is_rate_limited,
-        record_failed_attempt=_record_failed_attempt,
+        is_rate_limited=is_rate_limited,
+        record_failed_attempt=record_failed_attempt,
         enable_query_console=runtime.config.enable_query_console,
     )
 
@@ -141,152 +139,13 @@ def login_required(f):
 def log_action(action, table_name=None, query=None):
     """Log user actions for audit"""
     if 'user_id' in session:
-        service = _api_service()
+        service = api_service()
         service.audit_service.log_action(
             user_id=session['user_id'],
             action=action,
             table_name=table_name,
             query=query,
         )
-
-
-# ==================== Views (Templates served) ====================
-
-@app.route('/')
-def index():
-    """Home page - redirects to login or dashboard"""
-    if 'user_id' in session:
-        return redirect(url_for('dashboard'))
-    return redirect(url_for('login'))
-
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    """Login page - Step 1: Username and Password"""
-    error = None
-
-    if request.method == 'POST':
-        if _is_rate_limited('login'):
-            error = 'Too many login attempts. Please try again later.'
-            return render_template('login.html', error=error)
-
-        username = request.form.get('username')
-        password = request.form.get('password')
-
-        db_session = get_db()
-        user_service = UserService(db_session)
-        user = user_service.get_by_username(username or "")
-
-        if user and runtime.password_service.verify_and_upgrade(db_session, user, "password", password):
-            # Store pending auth in session for 2FA/security verification
-            session['pending_user_id'] = user.id
-            session['pending_username'] = user.username
-            session['pending_role'] = user.role
-            session['pending_totp_enabled'] = user.totp_enabled
-            session['auth_step'] = 'password_verified'
-
-            # Step 2: 2FA if enabled
-            if user.totp_enabled:
-                return redirect(url_for('verify_2fa'))
-
-            # Step 3: Security question if configured
-            if user.security_question:
-                return redirect(url_for('verify_security'))
-
-            # No additional steps required
-            complete_login()
-            return redirect(url_for('dashboard'))
-        else:
-            _record_failed_attempt('login')
-            error = 'Invalid username or password'
-
-    return render_template('login.html', error=error)
-
-
-@app.route('/verify-2fa', methods=['GET', 'POST'])
-def verify_2fa():
-    """Step 2: Two-Factor Authentication (TOTP)"""
-    if 'pending_user_id' not in session or session.get('auth_step') != 'password_verified':
-        return redirect(url_for('login'))
-
-    error = None
-
-    if request.method == 'POST':
-        if _is_rate_limited('login'):
-            error = 'Too many attempts. Please try again later.'
-            return render_template('verify_2fa.html', error=error,
-                                  username=session.get('pending_username'))
-
-        db_session = get_db()
-        user_service = UserService(db_session)
-        user = user_service.get_by_id(int(session.get('pending_user_id')))
-        if not user:
-            return redirect(url_for('login'))
-
-        totp_code = request.form.get('totp_code', '').strip()
-
-        # Server-side validation: require exactly 6 numeric digits
-        if not totp_code or not totp_code.isdigit() or len(totp_code) != 6:
-            error = 'Authentication code must be exactly 6 digits.'
-        else:
-            if user.totp_secret and runtime.totp_service.verify(user.totp_secret, totp_code):
-                session['auth_step'] = 'totp_verified'
-
-                # Proceed to security question if configured
-                if user.security_question:
-                    return redirect(url_for('verify_security'))
-
-                # No security question, complete login
-                complete_login()
-                return redirect(url_for('dashboard'))
-            else:
-                _record_failed_attempt('login')
-                error = 'Invalid authentication code. Please try again.'
-
-    return render_template('verify_2fa.html', error=error,
-                          username=session.get('pending_username'))
-
-
-@app.route('/verify-security', methods=['GET', 'POST'])
-def verify_security():
-    """Step 3: Security Question Verification"""
-    expected_step = 'totp_verified' if session.get('pending_totp_enabled') else 'password_verified'
-    if 'pending_user_id' not in session or session.get('auth_step') != expected_step:
-        return redirect(url_for('login'))
-
-    error = None
-    db_session = get_db()
-    user_service = UserService(db_session)
-    user = user_service.get_by_id(int(session.get('pending_user_id')))
-    if not user:
-        return redirect(url_for('login'))
-
-    question = user.security_question
-
-    # If no security question is configured, complete login
-    if not question:
-        complete_login()
-        return redirect(url_for('dashboard'))
-
-    if request.method == 'POST':
-        if _is_rate_limited('login'):
-            error = 'Too many attempts. Please try again later.'
-            return render_template('verify_security.html', error=error,
-                                  question=question,
-                                  username=session.get('pending_username'))
-
-        answer = request.form.get('security_answer', '').strip()
-        answer_norm = answer.lower()
-        if runtime.password_service.verify_and_upgrade(db_session, user, 'security_answer', answer_norm):
-            complete_login()
-            return redirect(url_for('dashboard'))
-        else:
-            _record_failed_attempt('login')
-            error = 'Incorrect security answer. Please try again.'
-
-    return render_template('verify_security.html', error=error,
-                          question=question,
-                          username=session.get('pending_username'))
 
 
 def complete_login():
@@ -307,142 +166,17 @@ def complete_login():
     log_action('login_complete')
 
 
-@app.route('/logout')
-def logout():
-    """Logout and clear session"""
-    log_action('logout')
-    session.clear()
-    return redirect(url_for('login'))
-
-
-@app.route('/dashboard')
-@login_required
-def dashboard():
-    """Main dashboard"""
-    db_session = get_db()
-
-    stats = {
-        'employees': db_session.execute(select(func.count(Employee.id))).scalar_one(),
-        'departments': db_session.execute(select(func.count(Department.id))).scalar_one(),
-        'projects': db_session.execute(
-            select(func.count(Project.id)).where(Project.status == 'active')
-        ).scalar_one(),
-        'total_salary': db_session.execute(
-            select(func.sum(Employee.salary)).where(Employee.is_active.is_(True))
-        ).scalar_one() or 0,
-    }
-
-    recent_employees = db_session.execute(
-        select(Employee).order_by(Employee.hire_date.desc()).limit(5)
-    ).scalars().all()
-
-    return render_template('dashboard.html', stats=stats, recent_employees=recent_employees)
-
-
-@app.route('/employees')
-@login_required
-def employees():
-    """Employees list page"""
-    db_session = get_db()
-    dept_filter = request.args.get('dept')
-    stmt = select(Employee).order_by(Employee.name)
-    if dept_filter:
-        stmt = stmt.where(Employee.department == dept_filter)
-    employees_list = db_session.execute(stmt).scalars().all()
-    return render_template('employees.html', employees=employees_list)
-
-
-@app.route('/departments')
-@login_required
-def departments():
-    """Departments list page"""
-    db_session = get_db()
-    employee_alias = aliased(Employee)
-    rows = db_session.execute(
-        select(
-            Department,
-            func.count(employee_alias.id).label("employee_count"),
-        )
-        .outerjoin(employee_alias, Department.name == employee_alias.department)
-        .group_by(Department.id)
-        .order_by(Department.name)
-    ).all()
-    departments_payload = [
-        {
-            "id": dept.id,
-            "name": dept.name,
-            "budget": dept.budget or 0,
-            "employee_count": int(employee_count or 0),
-        }
-        for dept, employee_count in rows
-    ]
-    return render_template('departments.html', departments=departments_payload)
-
-
-@app.route('/projects')
-@login_required
-def projects():
-    """Projects list page"""
-    db_session = get_db()
-    dept_alias = aliased(Department)
-    rows = db_session.execute(
-        select(
-            Project,
-            dept_alias.name.label("department_name"),
-        )
-        .outerjoin(dept_alias, Project.department_id == dept_alias.id)
-        .order_by(Project.start_date.desc())
-    ).all()
-    projects_payload = [
-        {
-            "id": project.id,
-            "name": project.name,
-            "description": project.description or "",
-            "department_name": department_name,
-            "start_date": project.start_date,
-            "end_date": project.end_date,
-            "status": project.status,
-        }
-        for project, department_name in rows
-    ]
-    return render_template('projects.html', projects=projects_payload)
-
-
-@app.route('/query')
-@login_required
-def query_page():
-    """Query interface page"""
-    if not runtime.config.enable_query_console:
-        return redirect(url_for('dashboard'))
-    return render_template('query.html')
-
-
-@app.route('/audit')
-@login_required
-def audit_log_page():
-    """Audit log page - admin only"""
-    if session.get('role') != 'admin':
-        return redirect(url_for('dashboard'))
-
-    db_session = get_db()
-    rows = db_session.execute(
-        select(AuditLog, AuthUser.username)
-        .outerjoin(AuthUser, AuditLog.user_id == AuthUser.id)
-        .order_by(AuditLog.timestamp.desc())
-        .limit(100)
-    ).all()
-    logs = [
-        {
-            "id": log.id,
-            "username": username,
-            "action": log.action,
-            "table_name": log.table_name,
-            "query": log.query,
-            "timestamp": log.timestamp,
-        }
-        for log, username in rows
-    ]
-    return render_template('audit.html', logs=logs)
+web_routes = DatabaseWebRoutes(
+    app=app,
+    runtime=runtime,
+    get_db=get_db,
+    login_required=login_required,
+    log_action=log_action,
+    is_rate_limited=is_rate_limited,
+    record_failed_attempt=record_failed_attempt,
+    complete_login=complete_login,
+)
+web_routes.register()
 
 
 app.register_blueprint(
@@ -457,7 +191,7 @@ app.register_blueprint(
             'session_response_model': SessionResponse,
             'totp_response_model': TotpCurrentResponse,
             'logout_response_model': LogoutResponse,
-            'api_service_factory': _api_service,
+            'api_service_factory': api_service,
             'enable_totp_test_endpoint': runtime.config.enable_totp_test_endpoint,
             'get_db': get_db,
             'get_totp_token': runtime.totp_service.get_token,
