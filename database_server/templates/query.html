@@ -4,15 +4,18 @@
 {% block page_title %}Query Console{% endblock %}
 
 {% block content %}
+<div id="db-query-console"
+     data-api-tables-url="{{ url_for('api_tables') }}"
+     data-api-query-url="{{ url_for('api_query') }}">
 <div class="row g-4">
     <div class="col-md-8">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span><i class="bi bi-terminal me-2"></i>SQL Query Editor</span>
                 <div class="btn-group btn-group-sm">
-                    <button class="btn btn-outline-secondary" onclick="insertSample('employees')">Employees</button>
-                    <button class="btn btn-outline-secondary" onclick="insertSample('departments')">Departments</button>
-                    <button class="btn btn-outline-secondary" onclick="insertSample('projects')">Projects</button>
+                    <button type="button" class="btn btn-outline-secondary" data-sample-table="employees">Employees</button>
+                    <button type="button" class="btn btn-outline-secondary" data-sample-table="departments">Departments</button>
+                    <button type="button" class="btn btn-outline-secondary" data-sample-table="projects">Projects</button>
                 </div>
             </div>
             <div class="card-body">
@@ -25,10 +28,10 @@ SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 5"></textarea>
 
                 <div class="d-flex justify-content-between align-items-center mt-3">
                     <div>
-                        <button class="btn btn-primary" onclick="executeQuery()">
+                        <button type="button" id="executeQueryBtn" class="btn btn-primary">
                             <i class="bi bi-play-fill"></i> Execute
                         </button>
-                        <button class="btn btn-outline-secondary" onclick="clearQuery()">
+                        <button type="button" id="clearQueryBtn" class="btn btn-outline-secondary">
                             <i class="bi bi-trash"></i> Clear
                         </button>
                     </div>
@@ -95,163 +98,9 @@ SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 5"></textarea>
         </div>
     </div>
 </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
-<script>
-    function escapeHtml(value) {
-        return String(value)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-
-    function renderCellValue(value) {
-        if (value === null || value === undefined) {
-            return '<span class="text-muted">null</span>';
-        }
-        return escapeHtml(value);
-    }
-
-    async function loadSchema() {
-        try {
-            const response = await fetch({{ url_for('api_tables')|tojson }});
-            const data = await response.json();
-
-            if (data.tables) {
-                const accordion = document.getElementById('schemaAccordion');
-                accordion.innerHTML = data.tables.map((table, idx) => `
-                    <div class="accordion-item">
-                        <h2 class="accordion-header">
-                            <button class="accordion-button collapsed" type="button"
-                                    data-bs-toggle="collapse" data-bs-target="#table${idx}">
-                                <i class="bi bi-table me-2"></i>${escapeHtml(table.name)}
-                                <span class="badge bg-secondary ms-2">${escapeHtml(table.row_count)}</span>
-                            </button>
-                        </h2>
-                        <div id="table${idx}" class="accordion-collapse collapse">
-                            <div class="accordion-body p-2">
-                                <ul class="list-unstyled mb-2 small">
-                                    ${table.columns.map(col => `
-                                        <li class="py-1 px-2 border-bottom">
-                                            <code>${escapeHtml(col.name)}</code>
-                                            <span class="text-muted float-end">${escapeHtml(col.type)}</span>
-                                        </li>
-                                    `).join('')}
-                                </ul>
-                                <button class="btn btn-sm btn-outline-primary w-100"
-                                        onclick='insertSample(${JSON.stringify(table.name)})'>
-                                    <i class="bi bi-eye"></i> Preview Data
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                `).join('');
-            }
-        } catch (error) {
-            console.error('Failed to load schema:', error);
-        }
-    }
-
-    function insertSample(table) {
-        document.getElementById('queryInput').value = `SELECT * FROM ${table} LIMIT 10`;
-    }
-
-    function clearQuery() {
-        document.getElementById('queryInput').value = '';
-        document.getElementById('resultsContainer').innerHTML = `
-            <div class="text-center text-muted py-5">
-                <i class="bi bi-inbox fs-1 d-block mb-2"></i>
-                Execute a query to see results
-            </div>
-        `;
-        document.getElementById('resultCount').textContent = '0 rows';
-    }
-
-    async function executeQuery() {
-        const query = document.getElementById('queryInput').value.trim();
-        if (!query) {
-            alert('Please enter a query');
-            return;
-        }
-
-        const status = document.getElementById('queryStatus');
-        const resultsContainer = document.getElementById('resultsContainer');
-        const resultCount = document.getElementById('resultCount');
-
-        status.textContent = 'Executing...';
-        status.className = 'text-muted';
-
-        const startTime = performance.now();
-
-        try {
-            const response = await fetch({{ url_for('api_query')|tojson }}, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ query })
-            });
-
-            const data = await response.json();
-            const duration = (performance.now() - startTime).toFixed(0);
-
-            if (data.success) {
-                status.textContent = `Completed in ${duration}ms`;
-                status.className = 'text-success';
-                resultCount.textContent = `${data.row_count} rows`;
-
-                if (data.data.length === 0) {
-                    resultsContainer.innerHTML = `
-                        <div class="text-center text-muted py-4">
-                            <i class="bi bi-inbox fs-3 d-block mb-2"></i>
-                            No results returned
-                        </div>
-                    `;
-                } else {
-                    resultsContainer.innerHTML = `
-                        <div class="table-responsive">
-                            <table class="table table-sm table-hover mb-0">
-                                <thead>
-                                    <tr>${data.columns.map(col => `<th>${escapeHtml(col)}</th>`).join('')}</tr>
-                                </thead>
-                                <tbody>
-                                    ${data.data.map(row => `
-                                        <tr>${data.columns.map(col => `<td>${renderCellValue(row[col])}</td>`).join('')}</tr>
-                                    `).join('')}
-                                </tbody>
-                            </table>
-                        </div>
-                    `;
-                }
-            } else {
-                status.textContent = 'Error';
-                status.className = 'text-danger';
-                resultsContainer.innerHTML = `
-                    <div class="alert alert-danger mb-0">
-                        <i class="bi bi-exclamation-triangle me-2"></i>${escapeHtml(data.error || 'Unknown error')}
-                    </div>
-                `;
-            }
-        } catch (error) {
-            status.textContent = 'Error';
-            status.className = 'text-danger';
-            resultsContainer.innerHTML = `
-                <div class="alert alert-danger mb-0">
-                    <i class="bi bi-exclamation-triangle me-2"></i>${escapeHtml(error.message || String(error))}
-                </div>
-            `;
-        }
-    }
-
-    // Keyboard shortcut
-    document.getElementById('queryInput').addEventListener('keydown', (e) => {
-        if (e.ctrlKey && e.key === 'Enter') {
-            executeQuery();
-        }
-    });
-
-    // Load schema on page load
-    loadSchema();
-</script>
+<script src="{{ url_for('static', filename='js/query_console.js') }}"></script>
 {% endblock %}
