@@ -9,90 +9,27 @@ Container 2: Proxy Gateway (demo mode optional)
 
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, Response, abort
 import requests
-import urllib3
-from urllib3.exceptions import InsecureRequestWarning
 from functools import wraps
 from datetime import datetime
 import secrets
 import os
 import threading
 import hmac
-import logging
-from typing import Any, cast
-
-from cachelib.file import FileSystemCache
-from flask_session import Session
-import redis as redis_lib
-from werkzeug.middleware.proxy_fix import ProxyFix
+from typing import Any
 from werkzeug.local import LocalProxy
 
 from .api_schemas import ConnectApiRequest, QueryApiRequest, TablePathParams
 from .api_validation import RequestValidator, RequestPayloadValidationError
 from .api_services import ProxyApiService
 from .api_blueprint import create_api_blueprint
+from .runtime import ProxyCloneRuntime
 
-app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
-
-# Environment / feature flags
-APP_ENV = os.environ.get('APP_ENV', 'production').lower()
-DEMO_MODE = APP_ENV != 'production'
-DEBUG_MODE = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
-trust_proxy_env = os.environ.get('TRUST_PROXY')
-if trust_proxy_env is None:
-    TRUST_PROXY = APP_ENV == 'production'
-else:
-    TRUST_PROXY = trust_proxy_env.lower() == 'true'
-
-if TRUST_PROXY:
-    setattr(app, "wsgi_app", ProxyFix(cast(Any, app.wsgi_app), x_for=1, x_proto=1, x_host=1, x_port=1))
-
-proxy_features_enabled_env = os.environ.get('PROXY_FEATURES_ENABLED')
-if proxy_features_enabled_env is None:
-    PROXY_FEATURES_ENABLED = DEMO_MODE
-else:
-    PROXY_FEATURES_ENABLED = proxy_features_enabled_env.lower() == 'true'
-
-# Configuration - Use HTTPS for database server (or HTTP for local testing)
-DATABASE_SERVER_URL = os.environ.get('DATABASE_SERVER_URL', 'https://localhost:5001')
-
-# SSL verification setting (False for self-signed certs)
-ssl_verify_env = os.environ.get('SSL_VERIFY')
-if ssl_verify_env is None:
-    SSL_VERIFY = not DEMO_MODE
-else:
-    SSL_VERIFY = ssl_verify_env.lower() == 'true'
-
-if not SSL_VERIFY:
-    urllib3.disable_warnings(InsecureRequestWarning)
-
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-cookie_secure_env = os.environ.get('SESSION_COOKIE_SECURE')
-if cookie_secure_env is None:
-    app.config['SESSION_COOKIE_SECURE'] = APP_ENV == 'production'
-else:
-    app.config['SESSION_COOKIE_SECURE'] = cookie_secure_env.lower() == 'true'
-app.config['SESSION_COOKIE_SAMESITE'] = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax')
-
-# Logging
-logging.basicConfig(level=os.environ.get('LOG_LEVEL', 'INFO'))
-logger = logging.getLogger("proxy_clone")
-
-# Server-side sessions (Redis preferred)
-REDIS_URL = os.environ.get('REDIS_URL')
-if REDIS_URL:
-    app.config['SESSION_TYPE'] = 'redis'
-    app.config['SESSION_REDIS'] = redis_lib.from_url(REDIS_URL)
-    app.config['SESSION_KEY_PREFIX'] = os.environ.get('SESSION_KEY_PREFIX', 'proxy_session:')
-else:
-    session_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'sessions')
-    os.makedirs(session_dir, exist_ok=True)
-    app.config['SESSION_TYPE'] = 'cachelib'
-    app.config['SESSION_CACHELIB'] = FileSystemCache(cache_dir=session_dir)
-Session(app)
+runtime = ProxyCloneRuntime()
+app = runtime.app
+logger = runtime.logger
 
 def _debug(msg, *args):
-    if DEBUG_MODE:
+    if runtime.config.debug_mode:
         logger.debug(msg, *args)
 
 
@@ -106,7 +43,7 @@ def _ensure_csrf_token():
 
 @app.context_processor
 def inject_csrf_token():
-    return {'csrf_token': _ensure_csrf_token(), 'demo_mode': DEMO_MODE}
+    return {'csrf_token': _ensure_csrf_token(), 'demo_mode': runtime.config.demo_mode}
 
 
 @app.before_request
@@ -155,7 +92,7 @@ class CredentialVault:
     def _new_session(self):
         """Initialize a fresh requests session with SSL config"""
         self._requests_session = requests.Session()
-        self._requests_session.verify = SSL_VERIFY
+        self._requests_session.verify = runtime.config.ssl_verify
 
     def reset_auth(self, clear_credentials=False):
         """Clear stored auth state, cookies, and captured factors"""
@@ -224,7 +161,7 @@ class CredentialVault:
                 _debug("Sending TOTP code to server...")
                 self.store_totp_code(totp_code)
                 response = self._requests_session.post(
-                    f"{DATABASE_SERVER_URL}/api/login",
+                    f"{runtime.config.database_server_url}/api/login",
                     json={
                         'step': 'totp',
                         'totp_code': totp_code
@@ -265,7 +202,7 @@ class CredentialVault:
                 question = self.auth_state.get('security_question', '')
                 self.store_security_answer(question, security_answer)
                 response = self._requests_session.post(
-                    f"{DATABASE_SERVER_URL}/api/login",
+                    f"{runtime.config.database_server_url}/api/login",
                     json={
                         'step': 'security',
                         'security_answer': security_answer
@@ -288,7 +225,7 @@ class CredentialVault:
             # Step 1: Password authentication (starting fresh)
             self.auth_state = {'current_step': 'password'}
             response = self._requests_session.post(
-                f"{DATABASE_SERVER_URL}/api/login",
+                f"{runtime.config.database_server_url}/api/login",
                 json={
                     'step': 'password',
                     'username': self.credentials['username'],
@@ -351,7 +288,7 @@ class CredentialVault:
         # Check if session is valid
         try:
             response = self._requests_session.get(
-                f"{DATABASE_SERVER_URL}/api/session",
+                f"{runtime.config.database_server_url}/api/session",
                 timeout=5
             )
             if response.status_code == 200:
@@ -370,7 +307,7 @@ class CredentialVault:
         if not self.ensure_session():
             return None
 
-        url = f"{DATABASE_SERVER_URL}{path}"
+        url = f"{runtime.config.database_server_url}{path}"
 
         try:
             if method == 'GET':
@@ -440,13 +377,13 @@ vault = LocalProxy(lambda: _current_vault())
 
 
 def _proxy_api_service() -> Any:
-    return ProxyApiService(vault=vault, demo_mode=DEMO_MODE)
+    return ProxyApiService(vault=vault, demo_mode=runtime.config.demo_mode)
 
 
 def feature_enabled(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not PROXY_FEATURES_ENABLED:
+        if not runtime.config.proxy_features_enabled:
             abort(404)
         return f(*args, **kwargs)
     return decorated
@@ -484,7 +421,7 @@ def proxy_status_available(f):
 @app.route('/')
 def home():
     """Proxy's home page - query interface for end users"""
-    if not PROXY_FEATURES_ENABLED:
+    if not runtime.config.proxy_features_enabled:
         return jsonify({'error': 'Proxy demo features are disabled in production'}), 404
     status = vault.get_status()
     return render_template('home.html', status=status)
@@ -708,7 +645,7 @@ if __name__ == '__main__':
 
     if ssl_cert and ssl_key:
         logger.info("Starting proxy with HTTPS on port %s (cert: %s)...", PORT, ssl_cert)
-        app.run(host='0.0.0.0', port=PORT, debug=DEBUG_MODE, ssl_context=(ssl_cert, ssl_key))
+        app.run(host='0.0.0.0', port=PORT, debug=runtime.config.debug_mode, ssl_context=(ssl_cert, ssl_key))
     else:
         logger.info("SSL certificates not found. Starting proxy with HTTP on port %s...", PORT)
-        app.run(host='0.0.0.0', port=PORT, debug=DEBUG_MODE)
+        app.run(host='0.0.0.0', port=PORT, debug=runtime.config.debug_mode)
