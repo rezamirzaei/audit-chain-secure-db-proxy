@@ -7,95 +7,83 @@ Container 2: Proxy Gateway (demo mode optional)
 - Connects to database server via HTTPS
 """
 
-from flask import Flask, request, jsonify, session, redirect, url_for, abort
+from flask import Flask, jsonify, session, redirect, url_for, abort
 from functools import wraps
-import secrets
 import os
-import hmac
 from typing import Any
 from werkzeug.local import LocalProxy
 
 from .api_schemas import ConnectApiRequest, QueryApiRequest, TablePathParams
 from .api_validation import RequestValidator, RequestPayloadValidationError
 from .api_services import ProxyApiService
-from .api_blueprint import create_api_blueprint
+from .api_blueprint import ProxyApiBlueprintDependencies, create_api_blueprint
 from .runtime import ProxyCloneRuntime
 from .state.credential_vault import CredentialVault
 from .state.vault_registry import VaultRegistry
-from .web_routes import register_web_routes
+from .web_routes import ProxyWebRouteDependencies, register_web_routes
+from .ssl_utils import get_ssl_context
+from .common import (
+    SecurityHeadersManager,
+    ContextInjector,
+    enforce_csrf,
+    handle_request_validation_error,
+)
 
 runtime = ProxyCloneRuntime()
 app = runtime.app
 logger = runtime.logger
 
-def _debug(msg, *args):
+def debug_log(msg, *args):
     if runtime.config.debug_mode:
         logger.debug(msg, *args)
 
 
-def _ensure_csrf_token():
-    token = session.get('csrf_token')
-    if not token:
-        token = secrets.token_urlsafe(32)
-        session['csrf_token'] = token
-    return token
-
-
 @app.context_processor
 def inject_csrf_token():
-    return {'csrf_token': _ensure_csrf_token(), 'demo_mode': runtime.config.demo_mode}
+    return ContextInjector.inject_base_context(demo_mode=runtime.config.demo_mode)
 
 
 @app.before_request
-def enforce_csrf():
-    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
-        if request.path.startswith('/api/') and request.is_json:
-            return
-        token = session.get('csrf_token')
-        submitted = request.form.get('csrf_token') or request.headers.get('X-CSRF-Token')
-        if not token or not submitted or not hmac.compare_digest(token, submitted):
-            abort(400, description='Invalid CSRF token')
+def before_request_handlers() -> None:
+    """Register before-request handlers."""
+    enforce_csrf()
 
 
 @app.after_request
-def set_security_headers(response):
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['Referrer-Policy'] = 'no-referrer'
-    response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
-    if app.config.get('SESSION_COOKIE_SECURE'):
-        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-    return response
+def after_request_handlers(response: Any) -> Any:
+    """Register after-request handlers."""
+    return SecurityHeadersManager.set_security_headers(app)(response)
 
 
 @app.errorhandler(RequestPayloadValidationError)
-def handle_request_payload_validation_error(error):
-    return jsonify({'error': 'Invalid request payload', 'details': error.errors}), 400
+def handle_validation_error(error: RequestPayloadValidationError) -> tuple[dict[str, Any], int]:
+    """Handle request validation errors."""
+    return handle_request_validation_error(error)
 
-def _new_vault() -> CredentialVault:
+def create_vault_instance() -> CredentialVault:
     return CredentialVault(
         database_server_url=runtime.config.database_server_url,
         ssl_verify=runtime.config.ssl_verify,
-        debug_log=_debug,
+        debug_log=debug_log,
     )
 
 
-vault_registry = VaultRegistry(factory=_new_vault)
+vault_registry = VaultRegistry(factory=create_vault_instance)
 _VAULTS = vault_registry.vaults
 
 
-def _current_vault() -> CredentialVault:
+def current_vault() -> CredentialVault:
     return vault_registry.current(session)
 
 
-def _drop_current_vault() -> None:
+def drop_current_vault() -> None:
     vault_registry.drop_current(session)
 
 
-vault = LocalProxy(_current_vault)
+vault = LocalProxy(current_vault)
 
 
-def _proxy_api_service() -> Any:
+def proxy_api_service() -> Any:
     return ProxyApiService(vault=vault, demo_mode=runtime.config.demo_mode)
 
 
@@ -137,29 +125,29 @@ def proxy_status_available(f):
 
 register_web_routes(
     app,
-    {
-        "vault": vault,
-        "feature_enabled": feature_enabled,
-        "proxy_authenticated": proxy_authenticated,
-        "drop_current_vault": _drop_current_vault,
-        "debug": _debug,
-        "proxy_features_enabled": runtime.config.proxy_features_enabled,
-    },
+    ProxyWebRouteDependencies(
+        vault=vault,
+        feature_enabled=feature_enabled,
+        proxy_authenticated=proxy_authenticated,
+        drop_current_vault=drop_current_vault,
+        debug=debug_log,
+        proxy_features_enabled=runtime.config.proxy_features_enabled,
+    ),
 )
 
 
 app.register_blueprint(
     create_api_blueprint(
-        {
-            'request_validator': RequestValidator,
-            'connect_request_model': ConnectApiRequest,
-            'query_request_model': QueryApiRequest,
-            'table_path_model': TablePathParams,
-            'api_service_factory': _proxy_api_service,
-            'feature_enabled': feature_enabled,
-            'proxy_status_available': proxy_status_available,
-            'vault': vault,
-        }
+        ProxyApiBlueprintDependencies(
+            request_validator=RequestValidator,
+            connect_request_model=ConnectApiRequest,
+            query_request_model=QueryApiRequest,
+            table_path_model=TablePathParams,
+            api_service_factory=proxy_api_service,
+            feature_enabled=feature_enabled,
+            proxy_status_available=proxy_status_available,
+            vault=vault,
+        )
     )
 )
 
@@ -170,23 +158,12 @@ def create_app() -> Flask:
 
 
 if __name__ == '__main__':
-    # Check if SSL certificates exist for HTTPS
-    ssl_paths = [
-        ('/app/certs/cert.pem', '/app/certs/key.pem'),  # Docker path
-        ('certs/cert.pem', 'certs/key.pem'),  # Local path
-    ]
-
-    ssl_cert = None
-    ssl_key = None
-
-    for cert_path, key_path in ssl_paths:
-        if os.path.exists(cert_path) and os.path.exists(key_path):
-            ssl_cert = cert_path
-            ssl_key = key_path
-            break
+    # Get SSL certificates if available
+    ssl_cert, ssl_key = get_ssl_context()
 
     PORT = int(os.environ.get('PORT', 8080))
 
+    # Start server with or without HTTPS
     if ssl_cert and ssl_key:
         logger.info("Starting proxy with HTTPS on port %s (cert: %s)...", PORT, ssl_cert)
         app.run(host='0.0.0.0', port=PORT, debug=runtime.config.debug_mode, ssl_context=(ssl_cert, ssl_key))

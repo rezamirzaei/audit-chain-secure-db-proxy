@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
@@ -210,15 +211,25 @@ class ProxyWebController:
         )
 
 
-def register_web_routes(app: Flask, deps: dict[str, Any]) -> None:
+@dataclass(frozen=True)
+class ProxyWebRouteDependencies:
+    vault: Any
+    feature_enabled: Callable[[Any], Any]
+    proxy_authenticated: Callable[[Any], Any]
+    drop_current_vault: Callable[[], None]
+    debug: Callable[..., None]
+    proxy_features_enabled: bool
+
+
+def register_web_routes(app: Flask, deps: ProxyWebRouteDependencies) -> None:
     controller = ProxyWebController(
-        vault=deps["vault"],
-        drop_current_vault=deps["drop_current_vault"],
-        debug=deps["debug"],
-        proxy_features_enabled=deps["proxy_features_enabled"],
+        vault=deps.vault,
+        drop_current_vault=deps.drop_current_vault,
+        debug=deps.debug,
+        proxy_features_enabled=deps.proxy_features_enabled,
     )
-    feature_enabled = deps["feature_enabled"]
-    proxy_authenticated = deps["proxy_authenticated"]
+    feature_enabled = deps.feature_enabled
+    proxy_authenticated = deps.proxy_authenticated
 
     app.add_url_rule("/", endpoint="home", view_func=controller.home)
     app.add_url_rule(
@@ -245,4 +256,3 @@ def register_web_routes(app: Flask, deps: dict[str, Any]) -> None:
         view_func=mirror_api_view,
         methods=["GET", "POST"],
     )
-

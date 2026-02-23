@@ -1,40 +1,57 @@
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from flask import Blueprint, Response, jsonify, request
 
 
-def create_api_blueprint(deps: dict[str, Any]) -> Blueprint:
+DecoratorFunc = Callable[[Any], Any]
+ApiServiceFactory = Callable[[], Any]
+
+
+@dataclass(frozen=True)
+class ProxyApiBlueprintDependencies:
+    request_validator: Any
+    connect_request_model: Any
+    query_request_model: Any
+    table_path_model: Any
+    api_service_factory: ApiServiceFactory
+    feature_enabled: DecoratorFunc
+    proxy_status_available: DecoratorFunc
+    vault: Any
+
+
+def create_api_blueprint(deps: ProxyApiBlueprintDependencies) -> Blueprint:
     bp = Blueprint("proxy_api", __name__, url_prefix="/api")
 
-    request_validator = deps["request_validator"]
-    connect_request_model = deps["connect_request_model"]
-    query_request_model = deps["query_request_model"]
-    table_path_model = deps["table_path_model"]
+    request_validator = deps.request_validator
+    connect_request_model = deps.connect_request_model
+    query_request_model = deps.query_request_model
+    table_path_model = deps.table_path_model
 
     @bp.route("/health", methods=["GET"])
-    @deps["feature_enabled"]
+    @deps.feature_enabled
     def api_health():
-        return jsonify(deps["api_service_factory"]().health())
+        return jsonify(deps.api_service_factory().health())
 
     @bp.route("/status", methods=["GET"])
-    @deps["feature_enabled"]
-    @deps["proxy_status_available"]
+    @deps.feature_enabled
+    @deps.proxy_status_available
     def api_status():
-        return jsonify(deps["api_service_factory"]().status())
+        return jsonify(deps.api_service_factory().status())
 
     @bp.route("/connect", methods=["POST"])
-    @deps["feature_enabled"]
+    @deps.feature_enabled
     def api_connect():
         payload = request_validator.parse_json(request, connect_request_model)
-        body, status = deps["api_service_factory"]().connect(payload)
+        body, status = deps.api_service_factory().connect(payload)
         return jsonify(body), status
 
     @bp.route("/query", methods=["POST"])
-    @deps["feature_enabled"]
+    @deps.feature_enabled
     def api_query():
-        vault = deps["vault"]
+        vault = deps.vault
         if not vault.ensure_session():
             return jsonify({"error": "Not connected to database server"}), 401
 
@@ -45,9 +62,9 @@ def create_api_blueprint(deps: dict[str, Any]) -> Blueprint:
         return Response(response.content, content_type="application/json", status=response.status_code)
 
     @bp.route("/tables", methods=["GET"])
-    @deps["feature_enabled"]
+    @deps.feature_enabled
     def api_tables():
-        vault = deps["vault"]
+        vault = deps.vault
         if not vault.ensure_session():
             return jsonify({"error": "Not connected"}), 401
 
@@ -57,9 +74,9 @@ def create_api_blueprint(deps: dict[str, Any]) -> Blueprint:
         return Response(response.content, content_type="application/json")
 
     @bp.route("/table/<table_name>", methods=["GET"])
-    @deps["feature_enabled"]
+    @deps.feature_enabled
     def api_table_data(table_name: str):
-        vault = deps["vault"]
+        vault = deps.vault
         if not vault.ensure_session():
             return jsonify({"error": "Not connected"}), 401
 
