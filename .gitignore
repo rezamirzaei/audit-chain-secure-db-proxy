@@ -7,3 +7,9 @@ __pycache__/
 
 database_server/data/sessions/
 proxy_clone/data/sessions/
+
+# Local TLS certs and demo DB artifacts (generate locally; do not commit)
+database_server/certs/*.pem
+proxy_clone/certs/*.pem
+nginx/certs/*.pem
+database_server/data/*.db

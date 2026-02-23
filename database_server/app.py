@@ -41,7 +41,7 @@ else:
     TRUST_PROXY = TRUST_PROXY.lower() == 'true'
 
 if TRUST_PROXY:
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 ENABLE_TOTP_TEST_ENDPOINT = os.environ.get('ENABLE_TOTP_TEST_ENDPOINT')
 if ENABLE_TOTP_TEST_ENDPOINT is None:
     ENABLE_TOTP_TEST_ENDPOINT = DEMO_MODE
@@ -98,9 +98,7 @@ _RATE_LIMITS = {"login": {}}
 
 
 def _client_ip():
-    forwarded = request.headers.get('X-Forwarded-For', '')
-    if forwarded:
-        return forwarded.split(',')[0].strip()
+    # ProxyFix normalizes REMOTE_ADDR from trusted forwarded headers.
     return request.remote_addr or 'unknown'
 
 

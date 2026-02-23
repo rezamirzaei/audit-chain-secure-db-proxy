@@ -99,9 +99,25 @@ SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 5"></textarea>
 
 {% block extra_scripts %}
 <script>
+    function escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function renderCellValue(value) {
+        if (value === null || value === undefined) {
+            return '<span class="text-muted">null</span>';
+        }
+        return escapeHtml(value);
+    }
+
     async function loadSchema() {
         try {
-            const response = await fetch('/api/tables');
+            const response = await fetch({{ url_for('api_tables')|tojson }});
             const data = await response.json();
 
             if (data.tables) {
@@ -111,8 +127,8 @@ SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 5"></textarea>
                         <h2 class="accordion-header">
                             <button class="accordion-button collapsed" type="button"
                                     data-bs-toggle="collapse" data-bs-target="#table${idx}">
-                                <i class="bi bi-table me-2"></i>${table.name}
-                                <span class="badge bg-secondary ms-2">${table.row_count}</span>
+                                <i class="bi bi-table me-2"></i>${escapeHtml(table.name)}
+                                <span class="badge bg-secondary ms-2">${escapeHtml(table.row_count)}</span>
                             </button>
                         </h2>
                         <div id="table${idx}" class="accordion-collapse collapse">
@@ -120,13 +136,13 @@ SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 5"></textarea>
                                 <ul class="list-unstyled mb-2 small">
                                     ${table.columns.map(col => `
                                         <li class="py-1 px-2 border-bottom">
-                                            <code>${col.name}</code>
-                                            <span class="text-muted float-end">${col.type}</span>
+                                            <code>${escapeHtml(col.name)}</code>
+                                            <span class="text-muted float-end">${escapeHtml(col.type)}</span>
                                         </li>
                                     `).join('')}
                                 </ul>
                                 <button class="btn btn-sm btn-outline-primary w-100"
-                                        onclick="insertSample('${table.name}')">
+                                        onclick='insertSample(${JSON.stringify(table.name)})'>
                                     <i class="bi bi-eye"></i> Preview Data
                                 </button>
                             </div>
@@ -171,7 +187,7 @@ SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 5"></textarea>
         const startTime = performance.now();
 
         try {
-            const response = await fetch('/api/query', {
+            const response = await fetch({{ url_for('api_query')|tojson }}, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ query })
@@ -197,11 +213,11 @@ SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 5"></textarea>
                         <div class="table-responsive">
                             <table class="table table-sm table-hover mb-0">
                                 <thead>
-                                    <tr>${data.columns.map(col => `<th>${col}</th>`).join('')}</tr>
+                                    <tr>${data.columns.map(col => `<th>${escapeHtml(col)}</th>`).join('')}</tr>
                                 </thead>
                                 <tbody>
                                     ${data.data.map(row => `
-                                        <tr>${data.columns.map(col => `<td>${row[col] ?? '<span class="text-muted">null</span>'}</td>`).join('')}</tr>
+                                        <tr>${data.columns.map(col => `<td>${renderCellValue(row[col])}</td>`).join('')}</tr>
                                     `).join('')}
                                 </tbody>
                             </table>
@@ -213,7 +229,7 @@ SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 5"></textarea>
                 status.className = 'text-danger';
                 resultsContainer.innerHTML = `
                     <div class="alert alert-danger mb-0">
-                        <i class="bi bi-exclamation-triangle me-2"></i>${data.error}
+                        <i class="bi bi-exclamation-triangle me-2"></i>${escapeHtml(data.error || 'Unknown error')}
                     </div>
                 `;
             }
@@ -222,7 +238,7 @@ SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 5"></textarea>
             status.className = 'text-danger';
             resultsContainer.innerHTML = `
                 <div class="alert alert-danger mb-0">
-                    <i class="bi bi-exclamation-triangle me-2"></i>${error.message}
+                    <i class="bi bi-exclamation-triangle me-2"></i>${escapeHtml(error.message || String(error))}
                 </div>
             `;
         }
