@@ -27,4 +27,4 @@ jobs:
       - uses: actions/checkout@v4
       - name: Integration test (docker compose)
         run: |
-          bash test_setup.sh
+          bash scripts/test_setup.sh

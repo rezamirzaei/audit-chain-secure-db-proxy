@@ -212,7 +212,7 @@ Recovery (PITR, high-level):
 4. Start a new Postgres instance pointing at `<DEST_DIR>`, then repoint the app to it.
 
 Hands-on verification:
-- `./test_setup.sh` runs a Barman `check` + `backup`.
+- `./scripts/test_setup.sh` runs a Barman `check` + `backup`.
 - `bash scripts/dr_restore_drill.sh` runs an end-to-end PITR drill:
   - takes a backup
   - creates a restore point

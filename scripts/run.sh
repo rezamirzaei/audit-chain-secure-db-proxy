@@ -3,12 +3,12 @@
 # run.sh - Run Database Server & Proxy Clone
 #
 # Usage:
-#   ./run.sh          # Run with Docker (default)
-#   ./run.sh docker   # Run with Docker
-#   ./run.sh local    # Run locally with Python
-#   ./run.sh stop     # Stop all running instances
-#   ./run.sh logs     # Show Docker logs
-#   ./run.sh test     # Test if servers are running
+#   ./scripts/run.sh          # Run with Docker (default)
+#   ./scripts/run.sh docker   # Run with Docker
+#   ./scripts/run.sh local    # Run locally with Python
+#   ./scripts/run.sh stop     # Stop all running instances
+#   ./scripts/run.sh logs     # Show Docker logs
+#   ./scripts/run.sh test     # Test if servers are running
 #==============================================================================
 
 # Colors
@@ -18,8 +18,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Change to script directory
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Change to project root (script lives in ./scripts)
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
 # Configuration
@@ -93,9 +93,9 @@ run_docker() {
     echo "    Security Answer: blue"
     echo ""
     echo -e "  ${YELLOW}Commands:${NC}"
-    echo "    ./run.sh logs   - View container logs"
-    echo "    ./run.sh stop   - Stop containers"
-    echo "    ./run.sh test   - Test if servers are responding"
+    echo "    ./scripts/run.sh logs   - View container logs"
+    echo "    ./scripts/run.sh stop   - Stop containers"
+    echo "    ./scripts/run.sh test   - Test if servers are responding"
     echo ""
 
     # Show TOTP info

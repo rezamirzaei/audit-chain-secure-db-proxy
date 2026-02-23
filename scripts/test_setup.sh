@@ -27,7 +27,7 @@ else
 fi
 
 # Navigate to project directory
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 echo "Ensuring local demo TLS certificates exist..."
 bash scripts/generate_demo_certs.sh

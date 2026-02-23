@@ -7,8 +7,8 @@ def main() -> None:
     print("  - proxy_clone/")
     print("")
     print("Use one of:")
-    print("  ./run.sh docker")
-    print("  ./run.sh local")
+    print("  ./scripts/run.sh docker")
+    print("  ./scripts/run.sh local")
     print("  docker-compose up --build")
 
 
