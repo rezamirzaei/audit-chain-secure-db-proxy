@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
@@ -55,3 +55,87 @@ class QueryApiRequest(_StrictModel):
         if not value:
             raise ValueError("query must not be empty")
         return value
+
+
+class _ResponseModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ApiErrorResponse(_ResponseModel):
+    error: str
+    message: str | None = None
+
+
+class HealthResponse(_ResponseModel):
+    status: Literal["healthy"]
+    timestamp: str
+    database: Literal["connected"]
+
+
+class SessionResponse(_ResponseModel):
+    authenticated: bool
+    user_id: int | None = None
+    username: str | None = None
+    role: str | None = None
+    login_time: str | None = None
+
+
+class AuthenticatedUser(_ResponseModel):
+    id: int
+    username: str
+    role: str
+
+
+class LoginStepResponse(_ResponseModel):
+    success: Literal[True]
+    next_step: Literal["totp", "security"]
+    message: str
+    requires_2fa: bool | None = None
+    security_question: str | None = None
+
+
+class LoginSuccessResponse(_ResponseModel):
+    success: Literal[True]
+    authenticated: Literal[True]
+    user: AuthenticatedUser
+
+
+class TotpCurrentResponse(_ResponseModel):
+    username: str
+    totp_token: str
+    valid_for_seconds: int
+
+
+class LogoutResponse(_ResponseModel):
+    success: Literal[True]
+
+
+class TableSummary(_ResponseModel):
+    name: str
+    row_count: int
+    columns: list[dict[str, Any]]
+
+
+class TablesResponse(_ResponseModel):
+    tables: list[TableSummary]
+
+
+class QuerySuccessResponse(_ResponseModel):
+    success: Literal[True]
+    columns: list[str]
+    data: list[dict[str, Any]]
+    row_count: int
+
+
+class TableDataResponse(_ResponseModel):
+    success: Literal[True]
+    table: str
+    data: list[dict[str, Any]]
+    total: int
+    limit: int
+    offset: int
+
+
+class AuditVerifyResponse(_ResponseModel):
+    valid: bool
+    info: dict[str, Any] | None

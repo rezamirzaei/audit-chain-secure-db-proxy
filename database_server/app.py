@@ -43,6 +43,7 @@ _auth_module = _load_sibling_module("auth_utils")
 _db_module = _load_sibling_module("db")
 _api_schemas_module = _load_sibling_module("api_schemas")
 _api_validation_module = _load_sibling_module("api_validation")
+_api_services_module = _load_sibling_module("api_services")
 
 get_totp_token = _auth_module.get_totp_token
 verify_totp = _auth_module.verify_totp
@@ -55,6 +56,11 @@ LoginApiRequest = _api_schemas_module.LoginApiRequest
 QueryApiRequest = _api_schemas_module.QueryApiRequest
 RequestValidator = _api_validation_module.RequestValidator
 RequestPayloadValidationError = _api_validation_module.RequestPayloadValidationError
+DatabaseApiService = _api_services_module.DatabaseApiService
+HealthResponse = _api_schemas_module.HealthResponse
+SessionResponse = _api_schemas_module.SessionResponse
+TotpCurrentResponse = _api_schemas_module.TotpCurrentResponse
+LogoutResponse = _api_schemas_module.LogoutResponse
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
@@ -196,6 +202,22 @@ def get_db():
         # Per-request connection; schema is created at startup.
         db = g._database = connect_db(retries=1)
     return db
+
+
+def _api_service() -> Any:
+    return DatabaseApiService(
+        session_store=cast(Any, session),
+        get_db=get_db,
+        db_list_tables=db_list_tables,
+        db_table_columns=db_table_columns,
+        verify_totp=verify_totp,
+        verify_and_upgrade=_verify_and_upgrade,
+        complete_login=complete_login,
+        log_action=log_action,
+        is_rate_limited=_is_rate_limited,
+        record_failed_attempt=_record_failed_attempt,
+        enable_query_console=ENABLE_QUERY_CONSOLE,
+    )
 
 
 @app.teardown_appcontext
@@ -497,171 +519,33 @@ def audit_log_page():
 @app.route('/api/health')
 def api_health():
     """Health check endpoint"""
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'database': 'connected'
-    })
+    payload = HealthResponse(status='healthy', timestamp=datetime.now().isoformat(), database='connected')
+    return jsonify(payload.model_dump(mode='json'))
 
 
 @app.route('/api/session')
 def api_session():
     """Get current session info"""
     if 'user_id' not in session:
-        return jsonify({'authenticated': False})
+        payload = SessionResponse(authenticated=False)
+        return jsonify(payload.model_dump(mode='json'))
 
-    return jsonify({
-        'authenticated': True,
-        'user_id': session['user_id'],
-        'username': session['username'],
-        'role': session['role'],
-        'login_time': session.get('login_time')
-    })
+    payload = SessionResponse(
+        authenticated=True,
+        user_id=int(session['user_id']),
+        username=str(session['username']),
+        role=str(session['role']),
+        login_time=cast(str | None, session.get('login_time')),
+    )
+    return jsonify(payload.model_dump(mode='json'))
 
 
 @app.route('/api/login', methods=['POST'])
 def api_login():
     """API login endpoint - supports multi-step authentication"""
     payload = RequestValidator.parse_json(request, LoginApiRequest)
-    step = payload.step  # password, totp, security
-
-    if _is_rate_limited('login'):
-        return jsonify({'error': 'Too many login attempts. Please try again later.'}), 429
-
-    if step == 'password':
-        # Step 1: Verify username and password
-        username = payload.username
-        password = payload.password
-        if username is None or password is None:
-            return jsonify({'error': 'Missing credentials'}), 400
-
-        db = get_db()
-        user = db.execute(
-            "SELECT * FROM auth_users WHERE username = ?",
-            (username,)
-        ).fetchone()
-
-        if user and _verify_and_upgrade(db, user['id'], 'password', user['password'], password):
-            # Store pending auth info
-            session['pending_user_id'] = user['id']
-            session['pending_username'] = user['username']
-            session['pending_role'] = user['role']
-            session['pending_totp_enabled'] = user['totp_enabled']
-            session['auth_step'] = 'password_verified'
-
-            if user['totp_enabled']:
-                return jsonify({
-                    'success': True,
-                    'next_step': 'totp',
-                    'message': 'Password verified. Please provide 2FA code.',
-                    'requires_2fa': True
-                })
-            else:
-                # No 2FA required, check if security question needed
-                if user['security_question']:
-                    return jsonify({
-                        'success': True,
-                        'next_step': 'security',
-                        'security_question': user['security_question'],
-                        'message': 'Password verified. Please answer security question.'
-                    })
-                else:
-                    # Complete login
-                    complete_login()
-                    return jsonify({
-                        'success': True,
-                        'authenticated': True,
-                        'user': {
-                            'id': user['id'],
-                            'username': user['username'],
-                            'role': user['role']
-                        }
-                    })
-        else:
-            _record_failed_attempt('login')
-            return jsonify({'error': 'Invalid credentials'}), 401
-
-    elif step == 'totp':
-        # Step 2: Verify TOTP code
-        if 'pending_user_id' not in session or session.get('auth_step') != 'password_verified':
-            return jsonify({'error': 'Invalid session state. Start from login.'}), 400
-
-        totp_code = payload.totp_code or ''
-
-        # Validate format: must be exactly 6 digits
-        if not totp_code or not totp_code.isdigit() or len(totp_code) != 6:
-            _record_failed_attempt('login')
-            return jsonify({'error': 'Invalid 2FA code format. Code must be exactly 6 digits.'}), 400
-
-        db = get_db()
-        user = db.execute(
-            "SELECT totp_secret, security_question FROM auth_users WHERE id = ?",
-            (session.get('pending_user_id'),)
-        ).fetchone()
-        if not user:
-            return jsonify({'error': 'Invalid session state. Start from login.'}), 400
-
-        if verify_totp(user['totp_secret'], totp_code):
-            session['auth_step'] = 'totp_verified'
-
-            # Check if security question is needed
-            if user['security_question']:
-                return jsonify({
-                    'success': True,
-                    'next_step': 'security',
-                    'security_question': user['security_question'],
-                    'message': '2FA verified. Please answer security question.'
-                })
-            else:
-                # Complete login
-                complete_login()
-                return jsonify({
-                    'success': True,
-                    'authenticated': True,
-                    'user': {
-                        'id': session['user_id'],
-                        'username': session['username'],
-                        'role': session['role']
-                    }
-                })
-        else:
-            _record_failed_attempt('login')
-            return jsonify({'error': 'Invalid 2FA code'}), 401
-
-    elif step == 'security':
-        # Step 3: Verify security question
-        expected_step = 'totp_verified' if session.get('pending_totp_enabled') else 'password_verified'
-        if 'pending_user_id' not in session or session.get('auth_step') != expected_step:
-            return jsonify({'error': 'Invalid session state. Start from login.'}), 400
-
-        answer = (payload.security_answer or '').lower()
-        db = get_db()
-        user = db.execute(
-            "SELECT security_answer FROM auth_users WHERE id = ?",
-            (session.get('pending_user_id'),)
-        ).fetchone()
-        if not user:
-            return jsonify({'error': 'Invalid session state. Start from login.'}), 400
-
-        expected = user['security_answer'] or ''
-
-        if _verify_and_upgrade(db, session.get('pending_user_id'), 'security_answer', expected, answer):
-            complete_login()
-            return jsonify({
-                'success': True,
-                'authenticated': True,
-                'user': {
-                    'id': session['user_id'],
-                    'username': session['username'],
-                    'role': session['role']
-                }
-            })
-        else:
-            _record_failed_attempt('login')
-            return jsonify({'error': 'Incorrect security answer'}), 401
-
-    else:
-        return jsonify({'error': f'Unknown step: {step}'}), 400
+    body, status = _api_service().login(payload)
+    return jsonify(body), status
 
 
 @app.route('/api/totp/current')
@@ -674,11 +558,12 @@ def api_totp_current():
     user = db.execute("SELECT totp_secret FROM auth_users WHERE username = ?", (username,)).fetchone()
 
     if user and user['totp_secret']:
-        return jsonify({
-            'username': username,
-            'totp_token': get_totp_token(user['totp_secret']),
-            'valid_for_seconds': 30 - (int(time.time()) % 30)
-        })
+        payload = TotpCurrentResponse(
+            username=username,
+            totp_token=get_totp_token(user['totp_secret']),
+            valid_for_seconds=30 - (int(time.time()) % 30),
+        )
+        return jsonify(payload.model_dump(mode='json'))
     return jsonify({'error': 'User not found'}), 404
 
 
@@ -688,102 +573,35 @@ def api_logout():
     """API logout endpoint"""
     log_action('api_logout')
     session.clear()
-    return jsonify({'success': True})
+    payload = LogoutResponse(success=True)
+    return jsonify(payload.model_dump(mode='json'))
 
 
 @app.route('/api/tables')
 @login_required
 def api_tables():
     """Get list of tables"""
-    if not ENABLE_QUERY_CONSOLE:
-        return jsonify({'error': 'Query console disabled'}), 403
-    db = get_db()
-    tables = db_list_tables(db)
-
-    result = []
-    for table_name in tables:
-        count = db.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-        columns = db_table_columns(db, table_name)
-        result.append({
-            'name': table_name,
-            'row_count': count,
-            'columns': columns
-        })
-
-    return jsonify({'tables': result})
+    body, status = _api_service().tables()
+    return jsonify(body), status
 
 
 @app.route('/api/query', methods=['POST'])
 @login_required
 def api_query():
     """Execute a SQL query"""
-    if not ENABLE_QUERY_CONSOLE:
-        return jsonify({'error': 'Query console disabled'}), 403
     payload = RequestValidator.parse_json(request, QueryApiRequest)
-    query = payload.query
-
-    db = get_db()
-    query_lower = query.lower()
-    allowed_prefixes = ('select', 'pragma') if db.backend == 'sqlite' else ('select', 'show')
-    if not query_lower.startswith(allowed_prefixes):
-        return jsonify({'error': f"Only {', '.join(allowed_prefixes).upper()} queries are allowed"}), 403
-
-    # Block access to auth_users table
-    if 'auth_users' in query_lower:
-        return jsonify({'error': 'Access denied to this table'}), 403
-
-    try:
-        cursor = db.execute(query)
-        columns = [description[0] for description in cursor.description] if cursor.description else []
-        rows = cursor.fetchall()
-
-        log_action('query', query=query)
-
-        return jsonify({
-            'success': True,
-            'columns': columns,
-            'data': [dict(row) for row in rows],
-            'row_count': len(rows)
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
+    body, status = _api_service().query(payload)
+    return jsonify(body), status
 
 
 @app.route('/api/table/<table_name>')
 @login_required
 def api_table_data(table_name):
     """Get data from a specific table"""
-    if not ENABLE_QUERY_CONSOLE:
-        return jsonify({'error': 'Query console disabled'}), 403
-    if table_name == 'auth_users':
-        return jsonify({'error': 'Access denied'}), 403
-
     limit = request.args.get('limit', 100, type=int)
     offset = request.args.get('offset', 0, type=int)
-
-    try:
-        db = get_db()
-        if table_name not in db_list_tables(db):
-            return jsonify({'error': 'Table not found'}), 404
-
-        # Get total count
-        total = db.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-
-        # Get data
-        rows = db.execute(f"SELECT * FROM {table_name} LIMIT ? OFFSET ?", (limit, offset)).fetchall()
-
-        log_action('view_table', table_name=table_name)
-
-        return jsonify({
-            'success': True,
-            'table': table_name,
-            'data': [dict(row) for row in rows],
-            'total': total,
-            'limit': limit,
-            'offset': offset
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
+    body, status = _api_service().table_data(table_name, limit, offset)
+    return jsonify(body), status
 
 
 def verify_audit_chain():
@@ -809,7 +627,7 @@ def api_audit_verify():
     if session.get('role') != 'admin':
         return jsonify({'error': 'Forbidden'}), 403
     valid, info = verify_audit_chain()
-    return jsonify({'valid': valid, 'info': info})
+    return jsonify(_api_service().audit_verify(valid, info))
 
 
 # Initialize database on startup
