@@ -9,17 +9,12 @@ from functools import wraps
 from datetime import datetime
 import os
 import hmac
-import time
-import logging
 import secrets
 from typing import Any, cast
 from sqlalchemy import func, select
 from sqlalchemy.orm import aliased
 
-from .auth_utils import PasswordService, TotpService
-from .bootstrap import AppBootstrap
-from .config import AppConfig
-from .db import DatabaseSessionManager, init_db as init_database
+from .db import init_db as init_database
 from .api_schemas import (
     LoginApiRequest,
     QueryApiRequest,
@@ -35,28 +30,11 @@ from .api_services import DatabaseApiService
 from .api_blueprint import create_api_blueprint
 from .services import AuditService, QueryService, SchemaService, TableService, UserService
 from .models import AuthUser, AuditLog, Department, Employee, Project
+from .runtime import DatabaseServerRuntime
 
-config = AppConfig.from_env()
-bootstrap = AppBootstrap(config)
-app = bootstrap.create_app()
-
-logging.basicConfig(level=config.log_level)
-logger = logging.getLogger("database_server")
-
-DEMO_MODE = config.demo_mode
-DEBUG_MODE = config.debug_mode
-ENABLE_TOTP_TEST_ENDPOINT = config.enable_totp_test_endpoint
-ENABLE_QUERY_CONSOLE = config.enable_query_console
-
-# Database session manager (SQLAlchemy)
-db_manager = DatabaseSessionManager.from_env()
-password_service = PasswordService()
-totp_service = TotpService()
-
-# Basic in-memory rate limiting (per-process)
-RATE_LIMIT_WINDOW_SECONDS = config.rate_limit_window_seconds
-RATE_LIMIT_MAX_ATTEMPTS = config.rate_limit_max_attempts
-_RATE_LIMITS: dict[str, dict[str, list[float]]] = {"login": {}}
+runtime = DatabaseServerRuntime()
+app = runtime.app
+logger = runtime.logger
 
 
 def _client_ip():
@@ -65,18 +43,13 @@ def _client_ip():
 
 
 def _is_rate_limited(bucket):
-    now = time.time()
     ip = _client_ip()
-    attempts = [ts for ts in _RATE_LIMITS.get(bucket, {}).get(ip, []) if now - ts < RATE_LIMIT_WINDOW_SECONDS]
-    _RATE_LIMITS.setdefault(bucket, {})[ip] = attempts
-    return len(attempts) >= RATE_LIMIT_MAX_ATTEMPTS
+    return runtime.rate_limiter.is_limited(bucket, ip)
 
 
 def _record_failed_attempt(bucket):
-    now = time.time()
     ip = _client_ip()
-    attempts = _RATE_LIMITS.setdefault(bucket, {}).setdefault(ip, [])
-    attempts.append(now)
+    runtime.rate_limiter.record_failure(bucket, ip)
 
 
 def _ensure_csrf_token():
@@ -123,7 +96,7 @@ def get_db():
     """Get SQLAlchemy session for this request."""
     db_session = getattr(g, '_db_session', None)
     if db_session is None:
-        db_session = g._db_session = db_manager.session()
+        db_session = g._db_session = runtime.db_manager.session()
     return db_session
 
 
@@ -134,15 +107,15 @@ def _api_service() -> Any:
         db_session=db_session,
         user_service=UserService(db_session),
         audit_service=AuditService(db_session),
-        schema_service=SchemaService(db_manager.engine),
+        schema_service=SchemaService(runtime.db_manager.engine),
         query_service=QueryService(db_session),
         table_service=TableService(db_session),
-        password_service=password_service,
-        totp_service=totp_service,
+        password_service=runtime.password_service,
+        totp_service=runtime.totp_service,
         complete_login=complete_login,
         is_rate_limited=_is_rate_limited,
         record_failed_attempt=_record_failed_attempt,
-        enable_query_console=ENABLE_QUERY_CONSOLE,
+        enable_query_console=runtime.config.enable_query_console,
     )
 
 
@@ -204,7 +177,7 @@ def login():
         user_service = UserService(db_session)
         user = user_service.get_by_username(username or "")
 
-        if user and password_service.verify_and_upgrade(db_session, user, "password", password):
+        if user and runtime.password_service.verify_and_upgrade(db_session, user, "password", password):
             # Store pending auth in session for 2FA/security verification
             session['pending_user_id'] = user.id
             session['pending_username'] = user.username
@@ -256,7 +229,7 @@ def verify_2fa():
         if not totp_code or not totp_code.isdigit() or len(totp_code) != 6:
             error = 'Authentication code must be exactly 6 digits.'
         else:
-            if user.totp_secret and totp_service.verify(user.totp_secret, totp_code):
+            if user.totp_secret and runtime.totp_service.verify(user.totp_secret, totp_code):
                 session['auth_step'] = 'totp_verified'
 
                 # Proceed to security question if configured
@@ -304,7 +277,7 @@ def verify_security():
 
         answer = request.form.get('security_answer', '').strip()
         answer_norm = answer.lower()
-        if password_service.verify_and_upgrade(db_session, user, 'security_answer', answer_norm):
+        if runtime.password_service.verify_and_upgrade(db_session, user, 'security_answer', answer_norm):
             complete_login()
             return redirect(url_for('dashboard'))
         else:
@@ -439,7 +412,7 @@ def projects():
 @login_required
 def query_page():
     """Query interface page"""
-    if not ENABLE_QUERY_CONSOLE:
+    if not runtime.config.enable_query_console:
         return redirect(url_for('dashboard'))
     return render_template('query.html')
 
@@ -485,9 +458,9 @@ app.register_blueprint(
             'totp_response_model': TotpCurrentResponse,
             'logout_response_model': LogoutResponse,
             'api_service_factory': _api_service,
-            'enable_totp_test_endpoint': ENABLE_TOTP_TEST_ENDPOINT,
+            'enable_totp_test_endpoint': runtime.config.enable_totp_test_endpoint,
             'get_db': get_db,
-            'get_totp_token': totp_service.get_token,
+            'get_totp_token': runtime.totp_service.get_token,
             'login_required': login_required,
             'log_action': log_action,
         }
@@ -498,9 +471,9 @@ app.register_blueprint(
 # Initialize database on startup
 with app.app_context():
     init_database(
-        db_manager,
-        demo_mode=DEMO_MODE,
-        enable_totp_test_endpoint=ENABLE_TOTP_TEST_ENDPOINT,
+        runtime.db_manager,
+        demo_mode=runtime.config.demo_mode,
+        enable_totp_test_endpoint=runtime.config.enable_totp_test_endpoint,
         log_info=logger.info,
     )
 
@@ -534,8 +507,8 @@ if __name__ == '__main__':
     if ssl_cert and ssl_key:
         # Run with HTTPS
         logger.info("Starting server with HTTPS on port %s (cert: %s)...", PORT, ssl_cert)
-        app.run(host='0.0.0.0', port=PORT, debug=DEBUG_MODE, ssl_context=(ssl_cert, ssl_key))
+        app.run(host='0.0.0.0', port=PORT, debug=runtime.config.debug_mode, ssl_context=(ssl_cert, ssl_key))
     else:
         # Fallback to HTTP (for development without certs)
         logger.info("SSL certificates not found. Starting server with HTTP on port %s...", PORT)
-        app.run(host='0.0.0.0', port=PORT, debug=DEBUG_MODE)
+        app.run(host='0.0.0.0', port=PORT, debug=runtime.config.debug_mode)
