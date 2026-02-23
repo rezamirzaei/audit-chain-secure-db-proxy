@@ -7,16 +7,12 @@ and multi-factor authentication (password + TOTP 2FA)
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, g, abort
 from functools import wraps
 from datetime import datetime, timedelta
-import importlib
-import importlib.util
 import secrets
 import os
 import hmac
 import hashlib
 import time
 import logging
-import sys
-from pathlib import Path
 from typing import Any, cast
 
 from cachelib.file import FileSystemCache
@@ -24,47 +20,21 @@ from flask_session import Session
 import redis as redis_lib
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-def _load_sibling_module(module_name: str):
-    if __package__:
-        return importlib.import_module(f"{__package__}.{module_name}")
-
-    module_path = Path(__file__).with_name(f"{module_name}.py")
-    import_name = f"{Path(__file__).parent.name}_{module_name}"
-    spec = importlib.util.spec_from_file_location(import_name, module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec for {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[import_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_auth_module = _load_sibling_module("auth_utils")
-_db_module = _load_sibling_module("db")
-_api_schemas_module = _load_sibling_module("api_schemas")
-_api_validation_module = _load_sibling_module("api_validation")
-_api_services_module = _load_sibling_module("api_services")
-_api_blueprint_module = _load_sibling_module("api_blueprint")
-
-get_totp_token = _auth_module.get_totp_token
-verify_totp = _auth_module.verify_totp
-_verify_and_upgrade = _auth_module._verify_and_upgrade
-connect_db = _db_module.connect_db
-init_database = _db_module.init_db
-db_list_tables = _db_module.list_tables
-db_table_columns = _db_module.table_columns
-LoginApiRequest = _api_schemas_module.LoginApiRequest
-QueryApiRequest = _api_schemas_module.QueryApiRequest
-RequestValidator = _api_validation_module.RequestValidator
-RequestPayloadValidationError = _api_validation_module.RequestPayloadValidationError
-DatabaseApiService = _api_services_module.DatabaseApiService
-create_api_blueprint = _api_blueprint_module.create_api_blueprint
-HealthResponse = _api_schemas_module.HealthResponse
-SessionResponse = _api_schemas_module.SessionResponse
-TotpCurrentResponse = _api_schemas_module.TotpCurrentResponse
-LogoutResponse = _api_schemas_module.LogoutResponse
-TablePathParams = _api_schemas_module.TablePathParams
-TablePaginationParams = _api_schemas_module.TablePaginationParams
+from .auth_utils import get_totp_token, verify_totp, _verify_and_upgrade
+from .db import connect_db, init_db as init_database, list_tables as db_list_tables, table_columns as db_table_columns
+from .api_schemas import (
+    LoginApiRequest,
+    QueryApiRequest,
+    HealthResponse,
+    SessionResponse,
+    TotpCurrentResponse,
+    LogoutResponse,
+    TablePathParams,
+    TablePaginationParams,
+)
+from .api_validation import RequestValidator, RequestPayloadValidationError
+from .api_services import DatabaseApiService
+from .api_blueprint import create_api_blueprint
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))

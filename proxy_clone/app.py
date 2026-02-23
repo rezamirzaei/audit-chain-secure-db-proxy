@@ -13,15 +13,11 @@ import urllib3
 from urllib3.exceptions import InsecureRequestWarning
 from functools import wraps
 from datetime import datetime
-import importlib
-import importlib.util
 import secrets
 import os
 import threading
 import hmac
 import logging
-import sys
-from pathlib import Path
 from typing import Any, cast
 
 from cachelib.file import FileSystemCache
@@ -30,34 +26,10 @@ import redis as redis_lib
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.local import LocalProxy
 
-
-def _load_sibling_module(module_name: str):
-    if __package__:
-        return importlib.import_module(f"{__package__}.{module_name}")
-
-    module_path = Path(__file__).with_name(f"{module_name}.py")
-    import_name = f"{Path(__file__).parent.name}_{module_name}"
-    spec = importlib.util.spec_from_file_location(import_name, module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec for {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[import_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_api_schemas_module = _load_sibling_module("api_schemas")
-_api_validation_module = _load_sibling_module("api_validation")
-_api_services_module = _load_sibling_module("api_services")
-_api_blueprint_module = _load_sibling_module("api_blueprint")
-
-ConnectApiRequest = _api_schemas_module.ConnectApiRequest
-QueryApiRequest = _api_schemas_module.QueryApiRequest
-TablePathParams = _api_schemas_module.TablePathParams
-RequestValidator = _api_validation_module.RequestValidator
-RequestPayloadValidationError = _api_validation_module.RequestPayloadValidationError
-ProxyApiService = _api_services_module.ProxyApiService
-create_api_blueprint = _api_blueprint_module.create_api_blueprint
+from .api_schemas import ConnectApiRequest, QueryApiRequest, TablePathParams
+from .api_validation import RequestValidator, RequestPayloadValidationError
+from .api_services import ProxyApiService
+from .api_blueprint import create_api_blueprint
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))

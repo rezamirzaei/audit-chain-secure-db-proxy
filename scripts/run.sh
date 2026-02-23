@@ -150,10 +150,9 @@ run_local() {
 
     # Start Database Server
     print_info "Starting Database Server on port $DB_PORT_LOCAL..."
-    cd "$SCRIPT_DIR/database_server"
-    APP_ENV=demo ENABLE_TOTP_TEST_ENDPOINT=true ENABLE_QUERY_CONSOLE=true "$PYTHON_CMD" app.py > /tmp/db_server.log 2>&1 &
-    DB_PID=$!
     cd "$SCRIPT_DIR"
+    APP_ENV=demo ENABLE_TOTP_TEST_ENDPOINT=true ENABLE_QUERY_CONSOLE=true "$PYTHON_CMD" -m database_server.app > /tmp/db_server.log 2>&1 &
+    DB_PID=$!
 
     sleep 3
 
@@ -166,10 +165,9 @@ run_local() {
 
     # Start Proxy Server
     print_info "Starting Proxy Server on port $PROXY_PORT..."
-    cd "$SCRIPT_DIR/proxy_clone"
-    APP_ENV=demo SSL_VERIFY=false "$PYTHON_CMD" app.py > /tmp/proxy_server.log 2>&1 &
-    PROXY_PID=$!
     cd "$SCRIPT_DIR"
+    APP_ENV=demo SSL_VERIFY=false "$PYTHON_CMD" -m proxy_clone.app > /tmp/proxy_server.log 2>&1 &
+    PROXY_PID=$!
 
     sleep 2
 

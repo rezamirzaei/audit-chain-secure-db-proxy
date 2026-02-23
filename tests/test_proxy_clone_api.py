@@ -1,30 +1,27 @@
-import importlib.util
+import importlib
 import sys
 from pathlib import Path
 
 import pytest
 
 
-def _load_module(module_name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec for {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
+def _import_fresh(package_name: str):
+    for name in list(sys.modules):
+        if name == package_name or name.startswith(f"{package_name}."):
+            del sys.modules[name]
+    return importlib.import_module(f"{package_name}.app")
 
 
 @pytest.fixture()
 def proxy_module_demo(tmp_path, monkeypatch):
     root_dir = Path(__file__).resolve().parents[1]
-    proxy_dir = root_dir / "proxy_clone"
 
     monkeypatch.setenv("APP_ENV", "demo")
     monkeypatch.setenv("PROXY_FEATURES_ENABLED", "true")
     monkeypatch.delenv("REDIS_URL", raising=False)
 
-    module = _load_module("proxy_clone_app_demo", proxy_dir / "app.py")
+    sys.path.insert(0, str(root_dir))
+    module = _import_fresh("proxy_clone")
     module.app.testing = True
     yield module
     module._VAULTS.clear()
@@ -39,13 +36,13 @@ def proxy_client(proxy_module_demo):
 @pytest.fixture()
 def proxy_client_features_disabled(monkeypatch):
     root_dir = Path(__file__).resolve().parents[1]
-    proxy_dir = root_dir / "proxy_clone"
 
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("PROXY_FEATURES_ENABLED", "false")
     monkeypatch.delenv("REDIS_URL", raising=False)
 
-    module = _load_module("proxy_clone_app_prod_disabled", proxy_dir / "app.py")
+    sys.path.insert(0, str(root_dir))
+    module = _import_fresh("proxy_clone")
     module.app.testing = True
     with module.app.test_client() as client:
         yield client

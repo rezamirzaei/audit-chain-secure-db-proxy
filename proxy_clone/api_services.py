@@ -1,33 +1,8 @@
 from __future__ import annotations
 
-import importlib
-import importlib.util
-import sys
-from pathlib import Path
 from typing import Any
 
-
-def _load_sibling_module(module_name: str):
-    if __package__:
-        return importlib.import_module(f"{__package__}.{module_name}")
-
-    module_path = Path(__file__).with_name(f"{module_name}.py")
-    import_name = f"{Path(__file__).parent.name}_{module_name}"
-    spec = importlib.util.spec_from_file_location(import_name, module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec for {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[import_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_api_schemas_module = _load_sibling_module("api_schemas")
-ApiErrorResponse = _api_schemas_module.ApiErrorResponse
-ConnectApiRequest = _api_schemas_module.ConnectApiRequest
-HealthResponse = _api_schemas_module.HealthResponse
-PublicStatusResponse = _api_schemas_module.PublicStatusResponse
-VaultStatusResponse = _api_schemas_module.VaultStatusResponse
+from .api_schemas import ApiErrorResponse, ConnectApiRequest, HealthResponse, PublicStatusResponse, VaultStatusResponse
 
 
 class ProxyApiService:
@@ -50,7 +25,7 @@ class ProxyApiService:
     def status(self) -> dict[str, Any]:
         return self._dump(PublicStatusResponse(**self.vault.get_public_status()))
 
-    def connect(self, payload: Any) -> tuple[dict[str, Any], int]:
+    def connect(self, payload: ConnectApiRequest) -> tuple[dict[str, Any], int]:
         if payload.step == "password":
             username = payload.username
             password = payload.password

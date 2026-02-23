@@ -1,24 +1,20 @@
-import importlib.util
+import importlib
 import sys
 from pathlib import Path
 
 import pytest
 
 
-def _load_module(module_name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec for {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
+def _import_fresh(package_name: str):
+    for name in list(sys.modules):
+        if name == package_name or name.startswith(f"{package_name}."):
+            del sys.modules[name]
+    return importlib.import_module(f"{package_name}.app")
 
 
 @pytest.fixture()
 def db_client(tmp_path, monkeypatch):
     root_dir = Path(__file__).resolve().parents[1]
-    db_dir = root_dir / "database_server"
 
     monkeypatch.setenv("APP_ENV", "demo")
     monkeypatch.setenv("ENABLE_TOTP_TEST_ENDPOINT", "true")
@@ -31,8 +27,8 @@ def db_client(tmp_path, monkeypatch):
     monkeypatch.delenv("POSTGRES_DSN", raising=False)
     monkeypatch.delenv("REDIS_URL", raising=False)
 
-    sys.path.insert(0, str(db_dir))
-    module = _load_module("database_server_app", db_dir / "app.py")
+    sys.path.insert(0, str(root_dir))
+    module = _import_fresh("database_server")
 
     module.app.testing = True
     with module.app.test_client() as client:

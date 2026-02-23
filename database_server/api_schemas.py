@@ -117,7 +117,7 @@ class LogoutResponse(_ResponseModel):
 class TableSummary(_ResponseModel):
     name: str
     row_count: int
-    columns: list[dict[str, Any]]
+    columns: list[dict[str, str]]
 
 
 class TablesResponse(_ResponseModel):

@@ -1,39 +1,20 @@
 from __future__ import annotations
 
-import importlib
-import importlib.util
-import sys
-from pathlib import Path
 from typing import Any, Callable, MutableMapping
 
-
-def _load_sibling_module(module_name: str):
-    if __package__:
-        return importlib.import_module(f"{__package__}.{module_name}")
-
-    module_path = Path(__file__).with_name(f"{module_name}.py")
-    import_name = f"{Path(__file__).parent.name}_{module_name}"
-    spec = importlib.util.spec_from_file_location(import_name, module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Could not load module spec for {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[import_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_api_schemas_module = _load_sibling_module("api_schemas")
-ApiErrorResponse = _api_schemas_module.ApiErrorResponse
-AuditVerifyResponse = _api_schemas_module.AuditVerifyResponse
-AuthenticatedUser = _api_schemas_module.AuthenticatedUser
-LoginApiRequest = _api_schemas_module.LoginApiRequest
-LoginStepResponse = _api_schemas_module.LoginStepResponse
-LoginSuccessResponse = _api_schemas_module.LoginSuccessResponse
-QueryApiRequest = _api_schemas_module.QueryApiRequest
-QuerySuccessResponse = _api_schemas_module.QuerySuccessResponse
-TableDataResponse = _api_schemas_module.TableDataResponse
-TablesResponse = _api_schemas_module.TablesResponse
-TableSummary = _api_schemas_module.TableSummary
+from .api_schemas import (
+    ApiErrorResponse,
+    AuditVerifyResponse,
+    AuthenticatedUser,
+    LoginApiRequest,
+    LoginStepResponse,
+    LoginSuccessResponse,
+    QueryApiRequest,
+    QuerySuccessResponse,
+    TableDataResponse,
+    TablesResponse,
+    TableSummary,
+)
 
 
 class DatabaseApiService:
@@ -45,7 +26,7 @@ class DatabaseApiService:
         session_store: MutableMapping[str, Any],
         get_db: Callable[[], Any],
         db_list_tables: Callable[[Any], list[str]],
-        db_table_columns: Callable[[Any, str], list[str]],
+        db_table_columns: Callable[[Any, str], list[dict[str, str]]],
         verify_totp: Callable[[str, str], bool],
         verify_and_upgrade: Callable[[Any, int, str, str, str], bool],
         complete_login: Callable[[], None],
@@ -73,7 +54,7 @@ class DatabaseApiService:
     def _error(self, error: str, status: int, message: str | None = None) -> tuple[dict[str, Any], int]:
         return self._dump(ApiErrorResponse(error=error, message=message)), status
 
-    def login(self, payload: Any) -> tuple[dict[str, Any], int]:
+    def login(self, payload: LoginApiRequest) -> tuple[dict[str, Any], int]:
         if self._is_rate_limited("login"):
             return self._error("Too many login attempts. Please try again later.", 429)
 
@@ -85,7 +66,7 @@ class DatabaseApiService:
             return self._login_security(payload)
         return self._error(f"Unknown step: {payload.step}", 400)
 
-    def _login_password(self, payload: Any) -> tuple[dict[str, Any], int]:
+    def _login_password(self, payload: LoginApiRequest) -> tuple[dict[str, Any], int]:
         username = payload.username
         password = payload.password
         if username is None or password is None:
@@ -142,7 +123,7 @@ class DatabaseApiService:
             200,
         )
 
-    def _login_totp(self, payload: Any) -> tuple[dict[str, Any], int]:
+    def _login_totp(self, payload: LoginApiRequest) -> tuple[dict[str, Any], int]:
         if "pending_user_id" not in self.session or self.session.get("auth_step") != "password_verified":
             return self._error("Invalid session state. Start from login.", 400)
 
@@ -194,7 +175,7 @@ class DatabaseApiService:
             200,
         )
 
-    def _login_security(self, payload: Any) -> tuple[dict[str, Any], int]:
+    def _login_security(self, payload: LoginApiRequest) -> tuple[dict[str, Any], int]:
         expected_step = "totp_verified" if self.session.get("pending_totp_enabled") else "password_verified"
         if "pending_user_id" not in self.session or self.session.get("auth_step") != expected_step:
             return self._error("Invalid session state. Start from login.", 400)
@@ -238,7 +219,7 @@ class DatabaseApiService:
             return self._error("Query console disabled", 403)
 
         db = self._get_db()
-        summaries: list[Any] = []
+        summaries: list[TableSummary] = []
         for table_name in self._db_list_tables(db):
             count = db.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
             columns = self._db_table_columns(db, table_name)
@@ -246,7 +227,7 @@ class DatabaseApiService:
 
         return self._dump(TablesResponse(tables=summaries)), 200
 
-    def query(self, payload: Any) -> tuple[dict[str, Any], int]:
+    def query(self, payload: QueryApiRequest) -> tuple[dict[str, Any], int]:
         if not self._enable_query_console:
             return self._error("Query console disabled", 403)
 
