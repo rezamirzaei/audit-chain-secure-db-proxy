@@ -270,7 +270,8 @@ Hands-on verification:
 | GET/POST | `/connect` | Enter credentials |
 | POST | `/disconnect` | Clear credentials |
 | GET | `/mirror/*` | Mirror original UI |
-| GET | `/api/status` | Proxy status |
+| GET | `/api/health` | Proxy health (non-sensitive) |
+| GET | `/api/status` | Proxy status (requires local proxy session) |
 | POST | `/api/connect` | API connect |
 | POST | `/api/query` | Execute query (proxied) |
 | GET | `/api/tables` | Get tables (proxied) |

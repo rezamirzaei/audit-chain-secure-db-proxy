@@ -51,18 +51,39 @@ sleep 5
 # Wait for Postgres
 echo ""
 echo "Waiting for Postgres to be ready..."
+POSTGRES_READY=0
 for i in {1..30}; do
     if "${COMPOSE[@]}" exec -T postgres pg_isready -U "$POSTGRES_USER" -d "$APP_DB_NAME" > /dev/null 2>&1; then
         echo "✓ Postgres is ready"
+        POSTGRES_READY=1
         break
     fi
     sleep 1
 done
 
+if [ "$POSTGRES_READY" -ne 1 ]; then
+    echo "ERROR: Postgres did not become ready"
+    echo ""
+    echo "=== Postgres Logs ==="
+    "${COMPOSE[@]}" logs postgres || true
+    echo ""
+    echo "=== Database Server Logs ==="
+    "${COMPOSE[@]}" logs database-server || true
+    exit 1
+fi
+
 # Check container status
 echo ""
 echo "=== Container Status ==="
 "${COMPOSE[@]}" ps
+
+if ! "${COMPOSE[@]}" ps --services --filter status=running | grep -q '^database-server$'; then
+    echo "ERROR: database-server is not running"
+    echo ""
+    echo "=== Database Server Logs ==="
+    "${COMPOSE[@]}" logs database-server || true
+    exit 1
+fi
 
 # Test database server (HTTPS)
 echo ""

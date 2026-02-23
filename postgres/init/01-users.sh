@@ -15,42 +15,32 @@ psql -v ON_ERROR_STOP=1 \
   -v app_db_password="$APP_DB_PASSWORD" \
   -v barman_db_user="$BARMAN_DB_USER" \
   -v barman_db_password="$BARMAN_DB_PASSWORD" <<'SQL'
-DO
-$$
-DECLARE
-    app_user text := :'app_db_user';
-    app_password text := :'app_db_password';
-    barman_user text := :'barman_db_user';
-    barman_password text := :'barman_db_password';
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = app_user) THEN
-        EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', app_user, app_password);
-    END IF;
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'app_db_user', :'app_db_password')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'app_db_user')
+\gexec
 
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = barman_user) THEN
-        EXECUTE format('CREATE ROLE %I LOGIN REPLICATION PASSWORD %L', barman_user, barman_password);
-    END IF;
-END
-$$;
+SELECT format('CREATE ROLE %I LOGIN REPLICATION PASSWORD %L', :'barman_db_user', :'barman_db_password')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'barman_db_user')
+\gexec
 
-DO
-$$
-DECLARE
-    app_db_name text := :'app_db_name';
-    app_user text := :'app_db_user';
-    barman_user text := :'barman_db_user';
-BEGIN
-    EXECUTE format('GRANT ALL PRIVILEGES ON DATABASE %I TO %I', app_db_name, app_user);
-    EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', app_db_name, barman_user);
-END
-$$;
+SELECT format('GRANT ALL PRIVILEGES ON DATABASE %I TO %I', :'app_db_name', :'app_db_user')
+\gexec
 
-GRANT USAGE, CREATE ON SCHEMA public TO :"app_db_user";
+SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'app_db_name', :'barman_db_user')
+\gexec
+
+SELECT format('GRANT USAGE, CREATE ON SCHEMA public TO %I', :'app_db_user')
+\gexec
 
 -- Required for `barman check` (PostgreSQL 15+ backup functions).
-GRANT EXECUTE ON FUNCTION pg_catalog.pg_backup_start(text, boolean) TO :"barman_db_user";
-GRANT EXECUTE ON FUNCTION pg_catalog.pg_backup_stop(boolean) TO :"barman_db_user";
-GRANT EXECUTE ON FUNCTION pg_catalog.pg_switch_wal() TO :"barman_db_user";
-GRANT EXECUTE ON FUNCTION pg_catalog.pg_create_restore_point(text) TO :"barman_db_user";
-GRANT pg_monitor TO :"barman_db_user";
+SELECT format('GRANT EXECUTE ON FUNCTION pg_catalog.pg_backup_start(text, boolean) TO %I', :'barman_db_user')
+\gexec
+SELECT format('GRANT EXECUTE ON FUNCTION pg_catalog.pg_backup_stop(boolean) TO %I', :'barman_db_user')
+\gexec
+SELECT format('GRANT EXECUTE ON FUNCTION pg_catalog.pg_switch_wal() TO %I', :'barman_db_user')
+\gexec
+SELECT format('GRANT EXECUTE ON FUNCTION pg_catalog.pg_create_restore_point(text) TO %I', :'barman_db_user')
+\gexec
+SELECT format('GRANT pg_monitor TO %I', :'barman_db_user')
+\gexec
 SQL
