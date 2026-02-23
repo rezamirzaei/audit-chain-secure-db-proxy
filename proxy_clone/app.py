@@ -711,6 +711,11 @@ app.register_blueprint(
 )
 
 
+def create_app() -> Flask:
+    """Application factory entrypoint for WSGI servers and tests."""
+    return app
+
+
 if __name__ == '__main__':
     # Check if SSL certificates exist for HTTPS
     ssl_paths = [
