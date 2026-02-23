@@ -3,6 +3,9 @@
 
 cd "$(dirname "$0")"
 
+echo "Ensuring local demo TLS certificates exist..."
+bash scripts/generate_demo_certs.sh
+
 # Find Python with Flask installed
 PYTHON_CMD=""
 for cmd in python3 python /Library/Frameworks/Python.framework/Versions/3.11/bin/python3; do

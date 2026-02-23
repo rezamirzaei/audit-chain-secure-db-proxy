@@ -2,6 +2,7 @@ import logging
 import os
 import sqlite3
 import time
+import importlib
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional, Sequence
 
@@ -350,7 +351,11 @@ def _backfill_audit_hashes(db: Db) -> None:
 
 
 def _ensure_default_users(db: Db, demo_mode: bool, enable_totp_test_endpoint: bool, log_info) -> None:
-    from auth_utils import generate_totp_secret, get_totp_token, _hash_value, _is_hash  # local import to avoid import-time side effects
+    auth_utils = importlib.import_module(f"{__package__}.auth_utils" if __package__ else "auth_utils")
+    generate_totp_secret = auth_utils.generate_totp_secret
+    get_totp_token = auth_utils.get_totp_token
+    _hash_value = auth_utils._hash_value
+    _is_hash = auth_utils._is_hash
 
     # Insert default admin user if not exists (with 2FA)
     if db.execute("SELECT COUNT(*) FROM auth_users WHERE username = 'admin'").fetchone()[0] == 0:

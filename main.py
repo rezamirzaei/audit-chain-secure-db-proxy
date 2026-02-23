@@ -1,16 +1,16 @@
-# This is a sample Python script.
-
-# Press ⌃R to execute it or replace it with your code.
-# Press Double ⇧ to search everywhere for classes, files, tool windows, actions, and settings.
+"""Convenience entrypoint for local development."""
 
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press ⌘F8 to toggle the breakpoint.
+def main() -> None:
+    print("This repo contains two services:")
+    print("  - database_server/")
+    print("  - proxy_clone/")
+    print("")
+    print("Use one of:")
+    print("  ./run.sh docker")
+    print("  ./run.sh local")
+    print("  docker-compose up --build")
 
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
-
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+if __name__ == "__main__":
+    main()

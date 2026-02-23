@@ -8,10 +8,6 @@ RUN mkdir -p /app/data /app/certs
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy SSL certificates
-COPY certs/cert.pem /app/certs/
-COPY certs/key.pem /app/certs/
-
 # Copy application code
 COPY . .
 

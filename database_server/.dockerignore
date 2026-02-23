@@ -9,3 +9,6 @@ __pycache__
 venv
 .idea
 *.log
+certs/*.pem
+data/*.db
+data/sessions/

@@ -38,6 +38,11 @@ print_success() { echo -e "${GREEN}✓ $1${NC}"; }
 print_error() { echo -e "${RED}✗ $1${NC}"; }
 print_info() { echo -e "${YELLOW}→ $1${NC}"; }
 
+ensure_demo_certs() {
+    print_info "Ensuring local demo TLS certificates exist..."
+    bash "$SCRIPT_DIR/scripts/generate_demo_certs.sh"
+}
+
 #------------------------------------------------------------------------------
 # Docker Mode
 #------------------------------------------------------------------------------
@@ -50,6 +55,8 @@ run_docker() {
         exit 1
     fi
     print_success "Docker is running"
+
+    ensure_demo_certs
 
     print_info "Building and starting containers..."
     docker-compose down --remove-orphans 2>/dev/null
@@ -113,6 +120,8 @@ show_logs() {
 #------------------------------------------------------------------------------
 run_local() {
     print_header "Starting Locally (without Docker)"
+
+    ensure_demo_certs
 
     # Kill existing processes
     print_info "Stopping any running local processes..."
@@ -240,8 +249,8 @@ test_servers() {
     echo ""
     print_info "Testing Proxy Server..."
 
-    if curl -s -k -m 3 "https://localhost:$PROXY_PORT/api/status" 2>/dev/null | grep -q "has_credentials"; then
-        PROXY_RESPONSE=$(curl -s -k -m 3 "https://localhost:$PROXY_PORT/api/status" 2>/dev/null)
+    if curl -s -k -m 3 "https://localhost:$PROXY_PORT/api/health" 2>/dev/null | grep -q "\"status\""; then
+        PROXY_RESPONSE=$(curl -s -k -m 3 "https://localhost:$PROXY_PORT/api/health" 2>/dev/null)
         print_success "Proxy Server (HTTPS:$PROXY_PORT) is running"
         echo "    Response: $PROXY_RESPONSE"
     else

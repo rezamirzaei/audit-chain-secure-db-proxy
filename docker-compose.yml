@@ -3,9 +3,14 @@ services:
     image: postgres:15-alpine
     container_name: demo-postgres
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=appdb
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${APP_DB_NAME:-appdb}
+      - APP_DB_NAME=${APP_DB_NAME:-appdb}
+      - APP_DB_USER=${APP_DB_USER:-app}
+      - APP_DB_PASSWORD=${APP_DB_PASSWORD:-app_password}
+      - BARMAN_DB_USER=${BARMAN_DB_USER:-barman}
+      - BARMAN_DB_PASSWORD=${BARMAN_DB_PASSWORD:-barman_password}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
@@ -28,7 +33,7 @@ services:
       - -c
       - wal_keep_size=64MB
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d appdb"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${APP_DB_NAME:-appdb}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -44,9 +49,9 @@ services:
       - BARMAN_SERVER_NAME=main
       - BARMAN_PG_HOST=postgres
       - BARMAN_PG_PORT=5432
-      - BARMAN_PG_DBNAME=appdb
-      - BARMAN_PG_USER=barman
-      - BARMAN_PG_PASSWORD=barman_password
+      - BARMAN_PG_DBNAME=${APP_DB_NAME:-appdb}
+      - BARMAN_PG_USER=${BARMAN_DB_USER:-barman}
+      - BARMAN_PG_PASSWORD=${BARMAN_DB_PASSWORD:-barman_password}
       - BARMAN_RETENTION_POLICY=RECOVERY WINDOW OF 7 DAYS
     volumes:
       - barman-data:/var/lib/barman
@@ -69,15 +74,16 @@ services:
       - "5002:5000"
     environment:
       - FLASK_ENV=development
-      - SECRET_KEY=database-server-secret-key-change-in-production
+      - SECRET_KEY=${DATABASE_SERVER_SECRET_KEY:-demo-database-server-secret-change-me}
       - APP_ENV=demo
       - ENABLE_TOTP_TEST_ENDPOINT=true
       - ENABLE_QUERY_CONSOLE=true
       - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql://app:app_password@postgres:5432/appdb
+      - DATABASE_URL=postgresql://${APP_DB_USER:-app}:${APP_DB_PASSWORD:-app_password}@postgres:5432/${APP_DB_NAME:-appdb}
       - PORT=5000
     volumes:
       - db-data:/app/data
+      - ./database_server/certs:/app/certs:ro
     depends_on:
       - postgres
       - redis
@@ -104,7 +110,7 @@ services:
       - "8080:8080"
     environment:
       - FLASK_ENV=development
-      - SECRET_KEY=proxy-clone-secret-key-change-in-production
+      - SECRET_KEY=${PROXY_CLONE_SECRET_KEY:-demo-proxy-clone-secret-change-me}
       - APP_ENV=demo
       - PROXY_FEATURES_ENABLED=true
       - DATABASE_SERVER_URL=https://database-server:5000
@@ -116,6 +122,8 @@ services:
     networks:
       - app-network
     restart: unless-stopped
+    volumes:
+      - ./proxy_clone/certs:/app/certs:ro
 
   redis:
     image: redis:7-alpine

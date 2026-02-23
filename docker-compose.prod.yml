@@ -3,9 +3,14 @@ services:
     image: postgres:15-alpine
     container_name: prod-postgres
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=appdb
+      - POSTGRES_USER=${POSTGRES_USER:?set POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      - POSTGRES_DB=${APP_DB_NAME:?set APP_DB_NAME}
+      - APP_DB_NAME=${APP_DB_NAME:?set APP_DB_NAME}
+      - APP_DB_USER=${APP_DB_USER:?set APP_DB_USER}
+      - APP_DB_PASSWORD=${APP_DB_PASSWORD:?set APP_DB_PASSWORD}
+      - BARMAN_DB_USER=${BARMAN_DB_USER:?set BARMAN_DB_USER}
+      - BARMAN_DB_PASSWORD=${BARMAN_DB_PASSWORD:?set BARMAN_DB_PASSWORD}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
@@ -28,7 +33,7 @@ services:
       - -c
       - wal_keep_size=64MB
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d appdb"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?set POSTGRES_USER} -d ${APP_DB_NAME:?set APP_DB_NAME}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -44,9 +49,9 @@ services:
       - BARMAN_SERVER_NAME=main
       - BARMAN_PG_HOST=postgres
       - BARMAN_PG_PORT=5432
-      - BARMAN_PG_DBNAME=appdb
-      - BARMAN_PG_USER=barman
-      - BARMAN_PG_PASSWORD=barman_password
+      - BARMAN_PG_DBNAME=${APP_DB_NAME:?set APP_DB_NAME}
+      - BARMAN_PG_USER=${BARMAN_DB_USER:?set BARMAN_DB_USER}
+      - BARMAN_PG_PASSWORD=${BARMAN_DB_PASSWORD:?set BARMAN_DB_PASSWORD}
       - BARMAN_RETENTION_POLICY=RECOVERY WINDOW OF 7 DAYS
     volumes:
       - barman-data:/var/lib/barman
@@ -63,10 +68,10 @@ services:
     container_name: database-server
     environment:
       - APP_ENV=production
-      - SECRET_KEY=database-server-secret-key-change-in-production
+      - SECRET_KEY=${DATABASE_SERVER_SECRET_KEY:?set DATABASE_SERVER_SECRET_KEY}
       - PORT=5000
       - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=postgresql://app:app_password@postgres:5432/appdb
+      - DATABASE_URL=postgresql://${APP_DB_USER:?set APP_DB_USER}:${APP_DB_PASSWORD:?set APP_DB_PASSWORD}@postgres:5432/${APP_DB_NAME:?set APP_DB_NAME}
       - ENABLE_TOTP_TEST_ENDPOINT=false
       - ENABLE_QUERY_CONSOLE=false
       - TRUST_PROXY=true
@@ -88,11 +93,11 @@ services:
     container_name: proxy-clone
     environment:
       - APP_ENV=production
-      - SECRET_KEY=proxy-clone-secret-key-change-in-production
+      - SECRET_KEY=${PROXY_CLONE_SECRET_KEY:?set PROXY_CLONE_SECRET_KEY}
       - DATABASE_SERVER_URL=http://database-server:5000
       - SSL_VERIFY=true
       - REDIS_URL=redis://redis:6379/1
-      - PROXY_FEATURES_ENABLED=true
+      - PROXY_FEATURES_ENABLED=${PROXY_FEATURES_ENABLED:-false}
       - TRUST_PROXY=true
     expose:
       - "8080"

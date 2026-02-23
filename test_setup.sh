@@ -4,6 +4,9 @@ set -euo pipefail
 
 echo "=== Testing Database Server & Proxy Clone Setup ==="
 
+POSTGRES_USER="${POSTGRES_USER:-postgres}"
+APP_DB_NAME="${APP_DB_NAME:-appdb}"
+
 # Check if Docker is running
 if ! docker info > /dev/null 2>&1; then
     echo "ERROR: Docker is not running. Please start Docker Desktop."
@@ -26,6 +29,9 @@ fi
 # Navigate to project directory
 cd "$(dirname "$0")"
 
+echo "Ensuring local demo TLS certificates exist..."
+bash scripts/generate_demo_certs.sh
+
 # Stop any existing containers
 echo "Stopping existing containers..."
 "${COMPOSE[@]}" down --remove-orphans -v 2>/dev/null
@@ -46,7 +52,7 @@ sleep 5
 echo ""
 echo "Waiting for Postgres to be ready..."
 for i in {1..30}; do
-    if "${COMPOSE[@]}" exec -T postgres pg_isready -U postgres -d appdb > /dev/null 2>&1; then
+    if "${COMPOSE[@]}" exec -T postgres pg_isready -U "$POSTGRES_USER" -d "$APP_DB_NAME" > /dev/null 2>&1; then
         echo "✓ Postgres is ready"
         break
     fi
@@ -66,12 +72,12 @@ curl -k -s https://localhost:5002/api/health | head -100
 # Test proxy
 echo ""
 echo "=== Testing Proxy ==="
-curl -k -s https://localhost:8080/api/status | head -100
+curl -k -s https://localhost:8080/api/health | head -100
 
 echo ""
 echo "=== Testing Barman (Disaster Recovery) ==="
 echo "Forcing WAL switch to validate archiving..."
-"${COMPOSE[@]}" exec -T postgres psql -U postgres -d appdb -c "SELECT pg_switch_wal();" > /dev/null
+"${COMPOSE[@]}" exec -T postgres psql -U "$POSTGRES_USER" -d "$APP_DB_NAME" -c "SELECT pg_switch_wal();" > /dev/null
 
 echo "Waiting for Barman to ingest at least one WAL..."
 for i in {1..30}; do

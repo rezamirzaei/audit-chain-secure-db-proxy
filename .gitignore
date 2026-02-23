@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
 
 database_server/data/sessions/
 proxy_clone/data/sessions/
@@ -13,3 +14,8 @@ database_server/certs/*.pem
 proxy_clone/certs/*.pem
 nginx/certs/*.pem
 database_server/data/*.db
+
+# Local compose env files can contain secrets
+.env
+.env.*
+!.env.example

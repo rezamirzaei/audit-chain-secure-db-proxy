@@ -9,7 +9,8 @@ Container 2: Proxy Gateway (demo mode optional)
 
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, Response, abort
 import requests
-from requests.packages.urllib3.exceptions import InsecureRequestWarning
+import urllib3
+from urllib3.exceptions import InsecureRequestWarning
 from functools import wraps
 from datetime import datetime
 import secrets
@@ -17,6 +18,9 @@ import os
 import threading
 import hmac
 import logging
+from typing import Any, cast
+
+from cachelib.file import FileSystemCache
 from flask_session import Session
 import redis as redis_lib
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -29,20 +33,20 @@ app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 APP_ENV = os.environ.get('APP_ENV', 'production').lower()
 DEMO_MODE = APP_ENV != 'production'
 DEBUG_MODE = os.environ.get('FLASK_DEBUG', 'false').lower() == 'true'
-TRUST_PROXY = os.environ.get('TRUST_PROXY')
-if TRUST_PROXY is None:
+trust_proxy_env = os.environ.get('TRUST_PROXY')
+if trust_proxy_env is None:
     TRUST_PROXY = APP_ENV == 'production'
 else:
-    TRUST_PROXY = TRUST_PROXY.lower() == 'true'
+    TRUST_PROXY = trust_proxy_env.lower() == 'true'
 
 if TRUST_PROXY:
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+    setattr(app, "wsgi_app", ProxyFix(cast(Any, app.wsgi_app), x_for=1, x_proto=1, x_host=1, x_port=1))
 
-proxy_features_env = os.environ.get('PROXY_FEATURES_ENABLED')
-if proxy_features_env is None:
+proxy_features_enabled_env = os.environ.get('PROXY_FEATURES_ENABLED')
+if proxy_features_enabled_env is None:
     PROXY_FEATURES_ENABLED = DEMO_MODE
 else:
-    PROXY_FEATURES_ENABLED = proxy_features_env.lower() == 'true'
+    PROXY_FEATURES_ENABLED = proxy_features_enabled_env.lower() == 'true'
 
 # Configuration - Use HTTPS for database server (or HTTP for local testing)
 DATABASE_SERVER_URL = os.environ.get('DATABASE_SERVER_URL', 'https://localhost:5001')
@@ -55,7 +59,7 @@ else:
     SSL_VERIFY = ssl_verify_env.lower() == 'true'
 
 if not SSL_VERIFY:
-    requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+    urllib3.disable_warnings(InsecureRequestWarning)
 
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 cookie_secure_env = os.environ.get('SESSION_COOKIE_SECURE')
@@ -76,10 +80,10 @@ if REDIS_URL:
     app.config['SESSION_REDIS'] = redis_lib.from_url(REDIS_URL)
     app.config['SESSION_KEY_PREFIX'] = os.environ.get('SESSION_KEY_PREFIX', 'proxy_session:')
 else:
-    app.config['SESSION_TYPE'] = 'filesystem'
-    app.config['SESSION_FILE_DIR'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'sessions')
-    os.makedirs(app.config['SESSION_FILE_DIR'], exist_ok=True)
-app.config['SESSION_USE_SIGNER'] = True
+    session_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'sessions')
+    os.makedirs(session_dir, exist_ok=True)
+    app.config['SESSION_TYPE'] = 'cachelib'
+    app.config['SESSION_CACHELIB'] = FileSystemCache(cache_dir=session_dir)
 Session(app)
 
 def _debug(msg, *args):
@@ -385,6 +389,16 @@ class CredentialVault:
             'auth_state': self.auth_state
         }
 
+    def get_public_status(self):
+        """Return non-sensitive status suitable for unauthenticated demo health checks."""
+        return {
+            'has_credentials': bool(self.credentials),
+            'has_totp': bool(self.totp_info),
+            'has_security_answer': bool(self.security_info.get('answer')),
+            'has_session': bool(self.session_cookies),
+            'active': bool(self.active_session),
+        }
+
 
 _VAULTS: dict[str, CredentialVault] = {}
 _VAULTS_LOCK = threading.Lock()
@@ -436,6 +450,16 @@ def proxy_authenticated(f):
             if next_step == 'waiting_security':
                 return redirect(url_for('connect', step='security'))
             return redirect(url_for('connect'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def proxy_status_available(f):
+    """Decorator for API status access after a proxy session has captured credentials."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not vault.credentials:
+            return jsonify({'error': 'Not connected'}), 401
         return f(*args, **kwargs)
     return decorated_function
 
@@ -630,10 +654,19 @@ def mirror_api(path):
 
 # ==================== Proxy's Own API ====================
 
+@app.route('/api/health')
+@feature_enabled
+def api_health():
+    """Minimal health endpoint with no sensitive state."""
+    return jsonify({'status': 'ok', 'demo_mode': DEMO_MODE})
+
+
 @app.route('/api/status')
+@feature_enabled
+@proxy_status_available
 def api_status():
     """Get proxy status"""
-    return jsonify(vault.get_status())
+    return jsonify(vault.get_public_status())
 
 
 @app.route('/api/connect', methods=['POST'])

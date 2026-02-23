@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Idempotent seed script for demo data."""
+import importlib
 import os
 
-from db import connect_db, init_db
+_db_module = importlib.import_module(f"{__package__}.db" if __package__ else "db")
+connect_db = _db_module.connect_db
+init_db = _db_module.init_db
 
 def _log_info(msg: str, *args) -> None:
     if args:

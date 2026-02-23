@@ -87,8 +87,8 @@ def _verify_value(stored: str, provided: str) -> tuple[bool, bool]:
         ok = check_password_hash(stored, provided)
         return ok, ok
 
-    ok = hmac.compare_digest(stored, provided)
-    return ok, ok
+    compare_ok = bool(hmac.compare_digest(stored, provided))
+    return compare_ok, compare_ok
 
 
 def _verify_and_upgrade(db, user_id: int, field: str, stored: str, provided: str) -> bool:
@@ -97,4 +97,3 @@ def _verify_and_upgrade(db, user_id: int, field: str, stored: str, provided: str
         db.execute(f"UPDATE auth_users SET {field} = ? WHERE id = ?", (_hash_value(provided), user_id))
         db.commit()
     return ok
-

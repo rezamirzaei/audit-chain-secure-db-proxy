@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Verify tamper-evident audit log chain."""
-import os
 import hashlib
+import importlib
+import os
 
-from db import connect_db, load_db_config
+_db_module = importlib.import_module(f"{__package__}.db" if __package__ else "db")
+connect_db = _db_module.connect_db
+load_db_config = _db_module.load_db_config
 
 
 def main() -> None:
