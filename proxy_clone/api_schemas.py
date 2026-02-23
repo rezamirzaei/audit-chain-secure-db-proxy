@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
@@ -55,3 +55,37 @@ class QueryApiRequest(_StrictModel):
         if not value:
             raise ValueError("query must not be empty")
         return value
+
+
+class _ResponseModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ApiErrorResponse(_ResponseModel):
+    error: str
+
+
+class HealthResponse(_ResponseModel):
+    status: Literal["ok"]
+    demo_mode: bool
+
+
+class PublicStatusResponse(_ResponseModel):
+    has_credentials: bool
+    has_totp: bool
+    has_security_answer: bool
+    has_session: bool
+    active: bool
+
+
+class VaultStatusResponse(_ResponseModel):
+    has_credentials: bool
+    username: str | None = None
+    captured_at: str | None = None
+    has_totp: bool
+    has_security_answer: bool
+    security_question: str | None = None
+    has_session: bool
+    last_login: str | None = None
+    active: bool | None = None
+    auth_state: dict[str, Any]

@@ -48,11 +48,13 @@ def _load_sibling_module(module_name: str):
 
 _api_schemas_module = _load_sibling_module("api_schemas")
 _api_validation_module = _load_sibling_module("api_validation")
+_api_services_module = _load_sibling_module("api_services")
 
 ConnectApiRequest = _api_schemas_module.ConnectApiRequest
 QueryApiRequest = _api_schemas_module.QueryApiRequest
 RequestValidator = _api_validation_module.RequestValidator
 RequestPayloadValidationError = _api_validation_module.RequestPayloadValidationError
+ProxyApiService = _api_services_module.ProxyApiService
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
@@ -461,6 +463,11 @@ def _drop_current_vault() -> None:
 
 vault = LocalProxy(lambda: _current_vault())
 
+
+def _proxy_api_service() -> Any:
+    return ProxyApiService(vault=vault, demo_mode=DEMO_MODE)
+
+
 def feature_enabled(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -691,7 +698,7 @@ def mirror_api(path):
 @feature_enabled
 def api_health():
     """Minimal health endpoint with no sensitive state."""
-    return jsonify({'status': 'ok', 'demo_mode': DEMO_MODE})
+    return jsonify(_proxy_api_service().health())
 
 
 @app.route('/api/status')
@@ -699,7 +706,7 @@ def api_health():
 @proxy_status_available
 def api_status():
     """Get proxy status"""
-    return jsonify(vault.get_public_status())
+    return jsonify(_proxy_api_service().status())
 
 
 @app.route('/api/connect', methods=['POST'])
@@ -707,41 +714,8 @@ def api_status():
 def api_connect():
     """API endpoint to connect with credentials"""
     payload = RequestValidator.parse_json(request, ConnectApiRequest)
-    step = payload.step
-
-    if step == 'password':
-        username = payload.username
-        password = payload.password
-        if username is None or password is None:
-            return jsonify({'error': 'Missing credentials'}), 400
-
-        vault.store_credentials(username, password)
-        result = vault.login()
-
-    elif step == 'totp':
-        if not vault.credentials:
-            return jsonify({'error': 'No stored credentials. Start with password step.'}), 400
-        totp_code = payload.totp_code or ''
-        result = vault.login(totp_code=totp_code)
-
-    elif step == 'security':
-        if not vault.credentials:
-            return jsonify({'error': 'No stored credentials. Start with password step.'}), 400
-        security_answer = payload.security_answer or ''
-        result = vault.login(security_answer=security_answer)
-
-    else:
-        return jsonify({'error': f'Unknown step: {step}'}), 400
-
-    if result.get('success'):
-        return jsonify({'success': True, 'status': vault.get_status()})
-
-    if result.get('requires_totp') or result.get('requires_security'):
-        payload = dict(result)
-        payload['status'] = vault.get_status()
-        return jsonify(payload), 200
-
-    return jsonify({'error': result.get('error', 'Failed to authenticate')}), 401
+    body, status = _proxy_api_service().connect(payload)
+    return jsonify(body), status
 
 
 @app.route('/api/query', methods=['POST'])
