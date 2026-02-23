@@ -5,3 +5,4 @@ Flask-Session==0.8.0
 cachelib==0.13.0
 redis==5.0.1
 gunicorn==21.2.0
+pydantic>=2.12,<3

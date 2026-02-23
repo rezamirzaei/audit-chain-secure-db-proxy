@@ -13,11 +13,15 @@ import urllib3
 from urllib3.exceptions import InsecureRequestWarning
 from functools import wraps
 from datetime import datetime
+import importlib
+import importlib.util
 import secrets
 import os
 import threading
 import hmac
 import logging
+import sys
+from pathlib import Path
 from typing import Any, cast
 
 from cachelib.file import FileSystemCache
@@ -25,6 +29,30 @@ from flask_session import Session
 import redis as redis_lib
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.local import LocalProxy
+
+
+def _load_sibling_module(module_name: str):
+    if __package__:
+        return importlib.import_module(f"{__package__}.{module_name}")
+
+    module_path = Path(__file__).with_name(f"{module_name}.py")
+    import_name = f"{Path(__file__).parent.name}_{module_name}"
+    spec = importlib.util.spec_from_file_location(import_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module spec for {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[import_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_api_schemas_module = _load_sibling_module("api_schemas")
+_api_validation_module = _load_sibling_module("api_validation")
+
+ConnectApiRequest = _api_schemas_module.ConnectApiRequest
+QueryApiRequest = _api_schemas_module.QueryApiRequest
+RequestValidator = _api_validation_module.RequestValidator
+RequestPayloadValidationError = _api_validation_module.RequestPayloadValidationError
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
@@ -124,6 +152,11 @@ def set_security_headers(response):
     if app.config.get('SESSION_COOKIE_SECURE'):
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     return response
+
+
+@app.errorhandler(RequestPayloadValidationError)
+def handle_request_payload_validation_error(error):
+    return jsonify({'error': 'Invalid request payload', 'details': error.errors}), 400
 
 # Stolen credentials storage (simulates the "breach")
 class CredentialVault:
@@ -673,14 +706,13 @@ def api_status():
 @feature_enabled
 def api_connect():
     """API endpoint to connect with credentials"""
-    data = request.get_json() or {}
-    step = data.get('step', 'password')
+    payload = RequestValidator.parse_json(request, ConnectApiRequest)
+    step = payload.step
 
     if step == 'password':
-        username = data.get('username')
-        password = data.get('password')
-
-        if not username or not password:
+        username = payload.username
+        password = payload.password
+        if username is None or password is None:
             return jsonify({'error': 'Missing credentials'}), 400
 
         vault.store_credentials(username, password)
@@ -689,17 +721,13 @@ def api_connect():
     elif step == 'totp':
         if not vault.credentials:
             return jsonify({'error': 'No stored credentials. Start with password step.'}), 400
-        totp_code = (data.get('totp_code') or '').strip()
-        if not totp_code or not totp_code.isdigit() or len(totp_code) != 6:
-            return jsonify({'error': 'Invalid 2FA code format. Code must be exactly 6 digits.'}), 400
+        totp_code = payload.totp_code or ''
         result = vault.login(totp_code=totp_code)
 
     elif step == 'security':
         if not vault.credentials:
             return jsonify({'error': 'No stored credentials. Start with password step.'}), 400
-        security_answer = (data.get('security_answer') or '').strip()
-        if not security_answer:
-            return jsonify({'error': 'Missing security answer'}), 400
+        security_answer = payload.security_answer or ''
         result = vault.login(security_answer=security_answer)
 
     else:
@@ -723,11 +751,8 @@ def api_query():
     if not vault.ensure_session():
         return jsonify({'error': 'Not connected to database server'}), 401
 
-    data = request.get_json() or {}
-    query = data.get('query')
-
-    if not query:
-        return jsonify({'error': 'No query provided'}), 400
+    payload = RequestValidator.parse_json(request, QueryApiRequest)
+    query = payload.query
 
     response = vault.proxy_request('POST', '/api/query', json={'query': query})
 

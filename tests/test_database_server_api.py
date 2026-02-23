@@ -65,6 +65,21 @@ def test_health(db_client):
     assert payload["status"] == "healthy"
 
 
+def test_database_api_rejects_invalid_json_payloads(db_client):
+    login_resp = db_client.post("/api/login", json={"step": "password", "username": "admin", "password": 123})
+    assert login_resp.status_code == 400
+    login_json = login_resp.get_json()
+    assert login_json["error"] == "Invalid request payload"
+    assert login_json["details"]
+
+    _login_admin(db_client)
+    query_resp = db_client.post("/api/query", json={"query": "   "})
+    assert query_resp.status_code == 400
+    query_json = query_resp.get_json()
+    assert query_json["error"] == "Invalid request payload"
+    assert query_json["details"]
+
+
 def test_login_flow_query_and_audit(db_client):
     _login_admin(db_client)
 
@@ -87,4 +102,3 @@ def test_login_flow_query_and_audit(db_client):
     audit_resp = db_client.get("/api/audit/verify")
     assert audit_resp.status_code == 200
     assert audit_resp.get_json()["valid"] is True
-

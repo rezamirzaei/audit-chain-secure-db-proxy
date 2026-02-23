@@ -69,6 +69,21 @@ def test_proxy_status_requires_local_proxy_session(proxy_client):
     assert "connected" in resp.get_json()["error"].lower()
 
 
+def test_proxy_api_rejects_invalid_json_payloads(proxy_client):
+    resp = proxy_client.post("/api/connect", json={"step": "password", "username": "alice", "password": 123})
+    assert resp.status_code == 400
+    payload = resp.get_json()
+    assert payload["error"] == "Invalid request payload"
+    assert payload["details"]
+
+    extra_field_resp = proxy_client.post(
+        "/api/connect",
+        json={"step": "password", "username": "alice", "password": "pw", "unexpected": True},
+    )
+    assert extra_field_resp.status_code == 400
+    assert extra_field_resp.get_json()["error"] == "Invalid request payload"
+
+
 def test_proxy_status_shape_is_sanitized_after_connect(proxy_client, proxy_module_demo, monkeypatch):
     def fake_login(self, totp_code=None, security_answer=None):
         self.auth_state = {"current_step": "waiting_totp"}

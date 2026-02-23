@@ -8,12 +8,15 @@ from flask import Flask, render_template, request, jsonify, session, redirect, u
 from functools import wraps
 from datetime import datetime, timedelta
 import importlib
+import importlib.util
 import secrets
 import os
 import hmac
 import hashlib
 import time
 import logging
+import sys
+from pathlib import Path
 from typing import Any, cast
 
 from cachelib.file import FileSystemCache
@@ -21,8 +24,25 @@ from flask_session import Session
 import redis as redis_lib
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-_auth_module = importlib.import_module(f"{__package__}.auth_utils" if __package__ else "auth_utils")
-_db_module = importlib.import_module(f"{__package__}.db" if __package__ else "db")
+def _load_sibling_module(module_name: str):
+    if __package__:
+        return importlib.import_module(f"{__package__}.{module_name}")
+
+    module_path = Path(__file__).with_name(f"{module_name}.py")
+    import_name = f"{Path(__file__).parent.name}_{module_name}"
+    spec = importlib.util.spec_from_file_location(import_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load module spec for {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[import_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_auth_module = _load_sibling_module("auth_utils")
+_db_module = _load_sibling_module("db")
+_api_schemas_module = _load_sibling_module("api_schemas")
+_api_validation_module = _load_sibling_module("api_validation")
 
 get_totp_token = _auth_module.get_totp_token
 verify_totp = _auth_module.verify_totp
@@ -31,6 +51,10 @@ connect_db = _db_module.connect_db
 init_database = _db_module.init_db
 db_list_tables = _db_module.list_tables
 db_table_columns = _db_module.table_columns
+LoginApiRequest = _api_schemas_module.LoginApiRequest
+QueryApiRequest = _api_schemas_module.QueryApiRequest
+RequestValidator = _api_validation_module.RequestValidator
+RequestPayloadValidationError = _api_validation_module.RequestPayloadValidationError
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
@@ -159,6 +183,11 @@ def set_security_headers(response):
     if app.config.get('SESSION_COOKIE_SECURE'):
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     return response
+
+
+@app.errorhandler(RequestPayloadValidationError)
+def handle_request_payload_validation_error(error):
+    return jsonify({'error': 'Invalid request payload', 'details': error.errors}), 400
 
 def get_db():
     """Get database connection"""
@@ -493,18 +522,17 @@ def api_session():
 @app.route('/api/login', methods=['POST'])
 def api_login():
     """API login endpoint - supports multi-step authentication"""
-    data = request.get_json() or {}
-    step = data.get('step', 'password')  # password, totp, security
+    payload = RequestValidator.parse_json(request, LoginApiRequest)
+    step = payload.step  # password, totp, security
 
     if _is_rate_limited('login'):
         return jsonify({'error': 'Too many login attempts. Please try again later.'}), 429
 
     if step == 'password':
         # Step 1: Verify username and password
-        username = data.get('username')
-        password = data.get('password')
-
-        if not username or not password:
+        username = payload.username
+        password = payload.password
+        if username is None or password is None:
             return jsonify({'error': 'Missing credentials'}), 400
 
         db = get_db()
@@ -558,7 +586,7 @@ def api_login():
         if 'pending_user_id' not in session or session.get('auth_step') != 'password_verified':
             return jsonify({'error': 'Invalid session state. Start from login.'}), 400
 
-        totp_code = data.get('totp_code', '').strip()
+        totp_code = payload.totp_code or ''
 
         # Validate format: must be exactly 6 digits
         if not totp_code or not totp_code.isdigit() or len(totp_code) != 6:
@@ -606,7 +634,7 @@ def api_login():
         if 'pending_user_id' not in session or session.get('auth_step') != expected_step:
             return jsonify({'error': 'Invalid session state. Start from login.'}), 400
 
-        answer = data.get('security_answer', '').strip().lower()
+        answer = (payload.security_answer or '').lower()
         db = get_db()
         user = db.execute(
             "SELECT security_answer FROM auth_users WHERE id = ?",
@@ -691,11 +719,8 @@ def api_query():
     """Execute a SQL query"""
     if not ENABLE_QUERY_CONSOLE:
         return jsonify({'error': 'Query console disabled'}), 403
-    data = request.get_json() or {}
-    query = data.get('query', '').strip()
-
-    if not query:
-        return jsonify({'error': 'No query provided'}), 400
+    payload = RequestValidator.parse_json(request, QueryApiRequest)
+    query = payload.query
 
     db = get_db()
     query_lower = query.lower()
