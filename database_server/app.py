@@ -4,95 +4,95 @@ A real database application with MVC architecture, SQLite database,
 and multi-factor authentication (password + TOTP 2FA)
 """
 
-from flask import Flask, request, jsonify, session, redirect, url_for, g, abort
-from functools import wraps
-from datetime import datetime
 import os
-import hmac
-import secrets
+from datetime import datetime
 from typing import Any, cast
 
-from .db import init_db as init_database
+from flask import Flask, g, request, session
+
+from .api_blueprint import DatabaseApiBlueprintDependencies, create_api_blueprint
 from .api_schemas import (
-    LoginApiRequest,
-    QueryApiRequest,
     HealthResponse,
-    SessionResponse,
-    TotpCurrentResponse,
+    LoginApiRequest,
     LogoutResponse,
-    TablePathParams,
+    QueryApiRequest,
+    SessionResponse,
     TablePaginationParams,
+    TablePathParams,
+    TotpCurrentResponse,
 )
-from .api_validation import RequestValidator, RequestPayloadValidationError
 from .api_services import DatabaseApiService
-from .api_blueprint import create_api_blueprint
-from .services import AuditService, QueryService, SchemaService, TableService, UserService
+from .api_validation import RequestPayloadValidationError, RequestValidator
+from .common import (
+    ContextInjector,
+    SecurityHeadersManager,
+    enforce_csrf,
+    handle_request_validation_error,
+    login_required,
+)
+from .db import init_db as init_database
 from .runtime import DatabaseServerRuntime
+from .services import AuditService, QueryService, SchemaService, TableService, UserService
+from .ssl_utils import get_ssl_context
 from .web_routes import DatabaseWebRoutes
 
 runtime = DatabaseServerRuntime()
 app = runtime.app
 logger = runtime.logger
+apply_security_headers = SecurityHeadersManager.set_security_headers(app)
+PENDING_SESSION_KEYS = (
+    "pending_totp_secret",
+    "pending_totp_enabled",
+    "pending_security_question",
+    "pending_security_answer",
+    "auth_step",
+)
 
 
-def client_ip():
-    # ProxyFix normalizes REMOTE_ADDR from trusted forwarded headers.
-    return request.remote_addr or 'unknown'
+def client_ip() -> str:
+    """Get client IP address, with support for proxied requests."""
+    return request.remote_addr or "unknown"
 
 
-def is_rate_limited(bucket):
+def is_rate_limited(bucket: str) -> bool:
+    """Check if client has exceeded rate limit for a bucket."""
     ip = client_ip()
     return runtime.rate_limiter.is_limited(bucket, ip)
 
 
-def record_failed_attempt(bucket):
+def record_failed_attempt(bucket: str) -> None:
+    """Record a failed attempt for rate limiting."""
     ip = client_ip()
     runtime.rate_limiter.record_failure(bucket, ip)
 
 
-def ensure_csrf_token():
-    token = session.get('csrf_token')
-    if not token:
-        token = secrets.token_urlsafe(32)
-        session['csrf_token'] = token
-    return token
-
-
 @app.context_processor
-def inject_csrf_token():
-    return {'csrf_token': ensure_csrf_token()}
+def inject_csrf_token() -> dict[str, Any]:
+    """Inject CSRF token into template context."""
+    return ContextInjector.inject_base_context()
 
 
 @app.before_request
-def enforce_csrf():
-    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
-        # JSON API clients are expected to use token-based auth; skip CSRF here
-        if request.path.startswith('/api/') and request.is_json:
-            return
-        token = session.get('csrf_token')
-        submitted = request.form.get('csrf_token') or request.headers.get('X-CSRF-Token')
-        if not token or not submitted or not hmac.compare_digest(token, submitted):
-            abort(400, description='Invalid CSRF token')
+def before_request_handlers() -> None:
+    """Register before-request handlers."""
+    enforce_csrf()
 
 
 @app.after_request
-def set_security_headers(response):
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['Referrer-Policy'] = 'no-referrer'
-    response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
-    if app.config.get('SESSION_COOKIE_SECURE'):
-        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-    return response
+def after_request_handlers(response: Any) -> Any:
+    """Register after-request handlers."""
+    return apply_security_headers(response)
 
 
 @app.errorhandler(RequestPayloadValidationError)
-def handle_request_payload_validation_error(error):
-    return jsonify({'error': 'Invalid request payload', 'details': error.errors}), 400
+def handle_validation_error(error: RequestPayloadValidationError) -> tuple[dict[str, Any], int]:
+    """Handle request validation errors."""
+    return handle_request_validation_error(error)
 
-def get_db():
+
+def get_db() -> Any:
     """Get SQLAlchemy session for this request."""
-    db_session = getattr(g, '_db_session', None)
+    db_session = getattr(g, "_db_session", None)
     if db_session is None:
         db_session = g._db_session = runtime.db_manager.session()
     return db_session
@@ -117,53 +117,58 @@ def api_service() -> Any:
     )
 
 
+def build_api_blueprint_dependencies() -> DatabaseApiBlueprintDependencies:
+    return DatabaseApiBlueprintDependencies(
+        request_validator=RequestValidator,
+        login_request_model=LoginApiRequest,
+        query_request_model=QueryApiRequest,
+        table_path_model=TablePathParams,
+        table_pagination_model=TablePaginationParams,
+        health_response_model=HealthResponse,
+        session_response_model=SessionResponse,
+        totp_response_model=TotpCurrentResponse,
+        logout_response_model=LogoutResponse,
+        api_service_factory=api_service,
+        enable_totp_test_endpoint=runtime.config.enable_totp_test_endpoint,
+        get_db=get_db,
+        get_totp_token=runtime.totp_service.get_token,
+        login_required=login_required,
+        log_action=log_action,
+    )
+
+
 @app.teardown_appcontext
-def close_connection(exception):
-    db_session = getattr(g, '_db_session', None)
+def close_connection(_exception: BaseException | None) -> None:
+    db_session = getattr(g, "_db_session", None)
     if db_session is not None:
         db_session.close()
 
 
-def login_required(f):
-    """Decorator to require authentication"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'user_id' not in session:
-            if request.is_json:
-                return jsonify({'error': 'Unauthorized', 'message': 'Please login first'}), 401
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return decorated_function
-
-
-def log_action(action, table_name=None, query=None):
-    """Log user actions for audit"""
-    if 'user_id' in session:
+def log_action(action: str, table_name: str | None = None, query: str | None = None) -> None:
+    """Log user actions for audit."""
+    if "user_id" in session:
         service = api_service()
         service.audit_service.log_action(
-            user_id=session['user_id'],
+            user_id=session["user_id"],
             action=action,
             table_name=table_name,
             query=query,
         )
 
 
-def complete_login():
-    """Complete the login process after all auth steps"""
+def complete_login() -> None:
+    """Complete the login process after all auth steps."""
     session.permanent = True
-    session['user_id'] = session.pop('pending_user_id')
-    session['username'] = session.pop('pending_username')
-    session['role'] = session.pop('pending_role')
-    session['login_time'] = datetime.now().isoformat()
+    session["user_id"] = session.pop("pending_user_id")
+    session["username"] = session.pop("pending_username")
+    session["role"] = session.pop("pending_role")
+    session["login_time"] = datetime.now().isoformat()
 
     # Clean up pending session data
-    session.pop('pending_totp_secret', None)
-    session.pop('pending_totp_enabled', None)
-    session.pop('pending_security_question', None)
-    session.pop('pending_security_answer', None)
-    session.pop('auth_step', None)
+    for key in PENDING_SESSION_KEYS:
+        session.pop(key, None)
 
-    log_action('login_complete')
+    log_action("login_complete")
 
 
 web_routes = DatabaseWebRoutes(
@@ -180,25 +185,7 @@ web_routes.register()
 
 
 app.register_blueprint(
-    create_api_blueprint(
-        {
-            'request_validator': RequestValidator,
-            'login_request_model': LoginApiRequest,
-            'query_request_model': QueryApiRequest,
-            'table_path_model': TablePathParams,
-            'table_pagination_model': TablePaginationParams,
-            'health_response_model': HealthResponse,
-            'session_response_model': SessionResponse,
-            'totp_response_model': TotpCurrentResponse,
-            'logout_response_model': LogoutResponse,
-            'api_service_factory': api_service,
-            'enable_totp_test_endpoint': runtime.config.enable_totp_test_endpoint,
-            'get_db': get_db,
-            'get_totp_token': runtime.totp_service.get_token,
-            'login_required': login_required,
-            'log_action': log_action,
-        }
-    )
+    create_api_blueprint(build_api_blueprint_dependencies())
 )
 
 
@@ -217,32 +204,18 @@ def create_app() -> Flask:
     return app
 
 
-if __name__ == '__main__':
-    # Check if SSL certificates exist for HTTPS
-    # Try Docker path first, then local path
-    ssl_paths = [
-        ('/app/certs/cert.pem', '/app/certs/key.pem'),  # Docker path
-        ('certs/cert.pem', 'certs/key.pem'),  # Local path
-    ]
+if __name__ == "__main__":
+    # Get SSL certificates if available
+    ssl_cert, ssl_key = get_ssl_context()
 
-    ssl_cert = None
-    ssl_key = None
+    # Determine port (5000 in Docker, 5001 locally to avoid macOS AirPlay conflict)
+    default_port = 5000 if os.path.exists("/app") else 5001
+    port = int(os.environ.get("PORT", default_port))
 
-    for cert_path, key_path in ssl_paths:
-        if os.path.exists(cert_path) and os.path.exists(key_path):
-            ssl_cert = cert_path
-            ssl_key = key_path
-            break
-
-    # Port to use (5000 in Docker, 5001 locally to avoid macOS AirPlay conflict)
-    default_port = 5000 if os.path.exists('/app') else 5001
-    PORT = int(os.environ.get('PORT', default_port))
-
+    # Start server with or without HTTPS
     if ssl_cert and ssl_key:
-        # Run with HTTPS
-        logger.info("Starting server with HTTPS on port %s (cert: %s)...", PORT, ssl_cert)
-        app.run(host='0.0.0.0', port=PORT, debug=runtime.config.debug_mode, ssl_context=(ssl_cert, ssl_key))
+        logger.info("Starting server with HTTPS on port %s (cert: %s)...", port, ssl_cert)
+        app.run(host="0.0.0.0", port=port, debug=runtime.config.debug_mode, ssl_context=(ssl_cert, ssl_key))
     else:
-        # Fallback to HTTP (for development without certs)
-        logger.info("SSL certificates not found. Starting server with HTTP on port %s...", PORT)
-        app.run(host='0.0.0.0', port=PORT, debug=runtime.config.debug_mode)
+        logger.info("SSL certificates not found. Starting server with HTTP on port %s...", port)
+        app.run(host="0.0.0.0", port=port, debug=runtime.config.debug_mode)

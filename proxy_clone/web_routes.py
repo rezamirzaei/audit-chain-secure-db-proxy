@@ -2,16 +2,45 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, Protocol, cast
 
 from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
+
+PROXY_MIRROR_BANNER_HTML = """
+        <div style="position:fixed;top:0;left:0;right:0;background:linear-gradient(90deg,#dc3545,#c82333);
+                    color:white;text-align:center;padding:8px;z-index:9999;font-size:14px;">
+            <i class="bi bi-shield-exclamation"></i>
+            <strong>PROXY MIRROR</strong> - You are viewing through the proxy gateway
+            <a href="/" style="color:white;margin-left:20px;">← Back to Proxy Home</a>
+        </div>
+        <style>
+            body{margin-top:40px !important;}
+            .sidebar{top:40px !important;height:calc(100vh - 40px) !important;}
+        </style>
+        """
+CONNECT_STEP_CREDENTIALS = "credentials"
+CONNECT_STEP_TOTP = "totp"
+CONNECT_STEP_SECURITY = "security"
+VALID_CONNECT_STEPS = {CONNECT_STEP_CREDENTIALS, CONNECT_STEP_TOTP, CONNECT_STEP_SECURITY}
+ConnectStep = Literal["credentials", "totp", "security"]
+
+
+class ProxyVaultLike(Protocol):
+    credentials: dict[str, Any]
+    auth_state: dict[str, Any]
+
+    def get_status(self) -> dict[str, Any]: ...
+    def store_credentials(self, username: Any, password: Any) -> None: ...
+    def login(self, totp_code: str | None = None, security_answer: str | None = None) -> dict[str, Any]: ...
+    def reset_auth(self, clear_credentials: bool = False) -> None: ...
+    def proxy_request(self, method: str, path: str, **kwargs: Any) -> Any | None: ...
 
 
 class ProxyWebController:
     def __init__(
         self,
         *,
-        vault: Any,
+        vault: ProxyVaultLike,
         drop_current_vault: Callable[[], None],
         debug: Callable[..., None],
         proxy_features_enabled: bool,
@@ -20,6 +49,18 @@ class ProxyWebController:
         self.drop_current_vault = drop_current_vault
         self.debug = debug
         self.proxy_features_enabled = proxy_features_enabled
+
+    @staticmethod
+    def connect_step_request_value() -> str:
+        if request.method == "GET":
+            return str(request.args.get("step", CONNECT_STEP_CREDENTIALS))
+        return str(request.form.get("step", CONNECT_STEP_CREDENTIALS))
+
+    @staticmethod
+    def normalize_connect_step(step: str) -> ConnectStep:
+        if step in VALID_CONNECT_STEPS:
+            return cast(ConnectStep, step)
+        return CONNECT_STEP_CREDENTIALS
 
     def home(self):
         """Proxy's home page - query interface for end users."""
@@ -45,35 +86,34 @@ class ProxyWebController:
 
         return self.render_connect(step=step, error=error)
 
-    def read_connect_step(self) -> str:
-        raw_step = request.args.get("step", "credentials") if request.method == "GET" else request.form.get(
-            "step", "credentials"
-        )
-        valid_steps = {"credentials", "totp", "security"}
-        if raw_step not in valid_steps:
-            return "credentials"
-        return str(raw_step)
+    def read_connect_step(self) -> ConnectStep:
+        return self.normalize_connect_step(self.connect_step_request_value())
 
     def log_connect_state(self, step: str) -> None:
         self.debug("connect() called - method=%s, step=%s", request.method, step)
         self.debug("vault.auth_state = %s", self.vault.auth_state)
         self.debug("vault.credentials = %s", bool(self.vault.credentials))
 
-    def guard_connect_step(self, step: str):
-        if step in {"totp", "security"} and not self.vault.credentials:
-            return self.redirect_connect_step("credentials")
+    @staticmethod
+    def totp_validation_error(totp_code: str) -> str | None:
+        if not totp_code:
+            return "Please enter the 2FA code"
+        if not totp_code.isdigit() or len(totp_code) != 6:
+            return "2FA code must be exactly 6 digits"
         return None
 
-    def handle_connect_post(self, step: str) -> tuple[str | None, Any | None]:
-        handlers: dict[str, Callable[[], tuple[str | None, Any | None]]] = {
-            "credentials": self.handle_credentials_submit,
-            "totp": self.handle_totp_submit,
-            "security": self.handle_security_submit,
+    def guard_connect_step(self, step: ConnectStep):
+        if step in {CONNECT_STEP_TOTP, CONNECT_STEP_SECURITY} and not self.vault.credentials:
+            return self.redirect_connect_step(CONNECT_STEP_CREDENTIALS)
+        return None
+
+    def handle_connect_post(self, step: ConnectStep) -> tuple[str | None, Any | None]:
+        handlers: dict[ConnectStep, Callable[[], tuple[str | None, Any | None]]] = {
+            CONNECT_STEP_CREDENTIALS: self.handle_credentials_submit,
+            CONNECT_STEP_TOTP: self.handle_totp_submit,
+            CONNECT_STEP_SECURITY: self.handle_security_submit,
         }
-        handler = handlers.get(step)
-        if handler is None:
-            return None, None
-        return handler()
+        return handlers[step]()
 
     def handle_credentials_submit(self) -> tuple[str | None, Any | None]:
         username = request.form.get("username")
@@ -95,10 +135,9 @@ class ProxyWebController:
         totp_code = request.form.get("totp_code", "").strip()
         self.debug("totp step - totp_code=%s, auth_state=%s", totp_code, self.vault.auth_state)
 
-        if not totp_code:
-            return "Please enter the 2FA code", None
-        if not totp_code.isdigit() or len(totp_code) != 6:
-            return "2FA code must be exactly 6 digits", None
+        validation_error = self.totp_validation_error(totp_code)
+        if validation_error is not None:
+            return validation_error, None
 
         result = self.vault.login(totp_code=totp_code)
         self.debug("totp login result: %s", result)
@@ -146,7 +185,7 @@ class ProxyWebController:
 
         return str(result.get("error", default_error)), None
 
-    def redirect_connect_step(self, step: str):
+    def redirect_connect_step(self, step: ConnectStep):
         return redirect(url_for("connect", step=step))
 
     def render_connect(self, *, step: str, error: str | None):
@@ -172,34 +211,27 @@ class ProxyWebController:
         if response is None:
             return "Failed to connect to database server", 503
 
-        content = response.content
         content_type = response.headers.get("Content-Type", "text/html")
-
-        if "text/html" in content_type:
-            content = content.decode("utf-8")
-            banner = """
-        <div style="position:fixed;top:0;left:0;right:0;background:linear-gradient(90deg,#dc3545,#c82333);
-                    color:white;text-align:center;padding:8px;z-index:9999;font-size:14px;">
-            <i class="bi bi-shield-exclamation"></i>
-            <strong>PROXY MIRROR</strong> - You are viewing through the proxy gateway
-            <a href="/" style="color:white;margin-left:20px;">← Back to Proxy Home</a>
-        </div>
-        <style>body{margin-top:40px !important;}.sidebar{top:40px !important;height:calc(100vh - 40px) !important;}</style>
-        """
-            content = content.replace("<body>", f"<body>{banner}")
-            content = content.replace('href="/', 'href="/mirror/')
-            content = content.replace("href='/", "href='/mirror/")
-            content = content.replace('action="/', 'action="/mirror/')
-            content = content.encode("utf-8")
-
+        content = self.mirror_response_content(response.content, content_type)
         return Response(content, content_type=content_type, status=response.status_code)
+
+    def mirror_response_content(self, content: bytes, content_type: str) -> bytes:
+        if "text/html" not in content_type:
+            return content
+        return self.rewrite_mirrored_html(content.decode("utf-8")).encode("utf-8")
+
+    @staticmethod
+    def rewrite_mirrored_html(content: str) -> str:
+        content = content.replace("<body>", f"<body>{PROXY_MIRROR_BANNER_HTML}")
+        content = content.replace('href="/', 'href="/mirror/')
+        content = content.replace("href='/", "href='/mirror/")
+        content = content.replace('action="/', 'action="/mirror/')
+        return content
 
     def mirror_api(self, path: str):
         """Mirror API calls to the database server."""
-        if request.method == "POST":
-            response = self.vault.proxy_request("POST", f"/api/{path}", json=request.get_json())
-        else:
-            response = self.vault.proxy_request("GET", f"/api/{path}")
+        method, kwargs = self.mirror_api_request_params()
+        response = self.vault.proxy_request(method, f"/api/{path}", **kwargs)
 
         if response is None:
             return jsonify({"error": "Failed to connect to database server"}), 503
@@ -210,10 +242,16 @@ class ProxyWebController:
             status=response.status_code,
         )
 
+    @staticmethod
+    def mirror_api_request_params() -> tuple[str, dict[str, Any]]:
+        if request.method == "POST":
+            return "POST", {"json": request.get_json()}
+        return "GET", {}
+
 
 @dataclass(frozen=True)
 class ProxyWebRouteDependencies:
-    vault: Any
+    vault: ProxyVaultLike
     feature_enabled: Callable[[Any], Any]
     proxy_authenticated: Callable[[Any], Any]
     drop_current_vault: Callable[[], None]

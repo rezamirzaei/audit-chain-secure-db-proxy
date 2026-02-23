@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from logging.config import fileConfig
 import os
+from logging.config import fileConfig
 from pathlib import Path
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
+
+from alembic import context
 
 config = context.config
 
@@ -15,13 +16,13 @@ if config.config_file_name is not None:
 target_metadata = None
 
 
-def _default_sqlite_url() -> str:
+def default_sqlite_url() -> str:
     repo_root = Path(__file__).resolve().parents[1]
     sqlite_path = repo_root / "database_server" / "data" / "database.db"
     return f"sqlite:///{sqlite_path}"
 
 
-def _resolve_database_url() -> str:
+def resolve_database_url() -> str:
     url = (
         os.environ.get("ALEMBIC_DATABASE_URL")
         or os.environ.get("DATABASE_URL")
@@ -34,10 +35,10 @@ def _resolve_database_url() -> str:
     if sqlite_path_env:
         return f"sqlite:///{Path(sqlite_path_env).expanduser()}"
 
-    return _default_sqlite_url()
+    return default_sqlite_url()
 
 
-config.set_main_option("sqlalchemy.url", _resolve_database_url())
+config.set_main_option("sqlalchemy.url", resolve_database_url())
 
 
 def run_migrations_offline() -> None:

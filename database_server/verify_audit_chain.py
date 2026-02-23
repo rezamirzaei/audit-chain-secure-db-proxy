@@ -1,12 +1,26 @@
 #!/usr/bin/env python3
 """Verify tamper-evident audit log chain."""
+
 import hashlib
 import importlib
 import os
 
+from sqlalchemy import select
+
+
 _db_module = importlib.import_module(f"{__package__}.db" if __package__ else "db")
-connect_db = _db_module.connect_db
+DatabaseSessionManager = _db_module.DatabaseSessionManager
 load_db_config = _db_module.load_db_config
+_models_module = importlib.import_module(f"{__package__}.models" if __package__ else "models")
+AuditLog = _models_module.AuditLog
+
+
+def build_audit_payload(prev_hash: str, row: AuditLog) -> str:
+    timestamp = row.timestamp.isoformat() if row.timestamp is not None else ""
+    return (
+        f"{prev_hash}|{timestamp}|{row.user_id}|{row.action}|"
+        f"{row.table_name or ''}|{row.query or ''}"
+    )
 
 
 def main() -> None:
@@ -15,24 +29,21 @@ def main() -> None:
         print("Database not found:", cfg.sqlite_path)
         return
 
-    db = connect_db(retries=int(os.environ.get("DB_CONNECT_RETRIES", "30")))
-    rows = db.execute(
-        "SELECT id, user_id, action, table_name, query, prev_hash, entry_hash, timestamp FROM audit_log ORDER BY id"
-    ).fetchall()
-    prev_hash = ''
-    for row in rows:
-        payload = f"{prev_hash}|{row['timestamp']}|{row['user_id']}|{row['action']}|{row['table_name'] or ''}|{row['query'] or ''}"
-        expected = hashlib.sha256(payload.encode('utf-8')).hexdigest()
-        if row['entry_hash'] != expected:
-            print('Audit chain verification FAILED at id', row['id'])
-            print(' expected:', expected)
-            print(' actual:  ', row['entry_hash'])
-            db.close()
-            return
-        prev_hash = row['entry_hash'] or ''
-    db.close()
-    print('Audit chain verification OK. Entries:', len(rows))
+    manager = DatabaseSessionManager.from_env()
+    with manager.session() as session:
+        rows = session.execute(select(AuditLog).order_by(AuditLog.id)).scalars().all()
+        prev_hash = ""
+        for row in rows:
+            payload = build_audit_payload(prev_hash, row)
+            expected = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+            if row.entry_hash != expected:
+                print("Audit chain verification FAILED at id", row.id)
+                print(" expected:", expected)
+                print(" actual:  ", row.entry_hash)
+                return
+            prev_hash = row.entry_hash or ""
+        print("Audit chain verification OK. Entries:", len(rows))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

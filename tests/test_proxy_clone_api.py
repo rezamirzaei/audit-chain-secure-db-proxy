@@ -1,27 +1,15 @@
-import importlib
-import sys
-from pathlib import Path
-
 import pytest
 
-
-def _import_fresh(package_name: str):
-    for name in list(sys.modules):
-        if name == package_name or name.startswith(f"{package_name}."):
-            del sys.modules[name]
-    return importlib.import_module(f"{package_name}.app")
+from tests.support import import_fresh_app
 
 
 @pytest.fixture()
-def proxy_module_demo(tmp_path, monkeypatch):
-    root_dir = Path(__file__).resolve().parents[1]
-
+def proxy_module_demo(monkeypatch):
     monkeypatch.setenv("APP_ENV", "demo")
     monkeypatch.setenv("PROXY_FEATURES_ENABLED", "true")
     monkeypatch.delenv("REDIS_URL", raising=False)
 
-    sys.path.insert(0, str(root_dir))
-    module = _import_fresh("proxy_clone")
+    module = import_fresh_app("proxy_clone")
     module.app.testing = True
     yield module
     module._VAULTS.clear()
@@ -35,14 +23,11 @@ def proxy_client(proxy_module_demo):
 
 @pytest.fixture()
 def proxy_client_features_disabled(monkeypatch):
-    root_dir = Path(__file__).resolve().parents[1]
-
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("PROXY_FEATURES_ENABLED", "false")
     monkeypatch.delenv("REDIS_URL", raising=False)
 
-    sys.path.insert(0, str(root_dir))
-    module = _import_fresh("proxy_clone")
+    module = import_fresh_app("proxy_clone")
     module.app.testing = True
     with module.app.test_client() as client:
         yield client

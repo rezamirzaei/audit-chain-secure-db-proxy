@@ -7,23 +7,19 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 
-def _parse_bool(value: str | None, default: bool) -> bool:
+def parse_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _ssl_cert_available() -> bool:
+def ssl_cert_available() -> bool:
     base_dir = Path(__file__).resolve().parent
-    cert_paths = [
-        Path("/app/certs/cert.pem"),
-        base_dir / "certs" / "cert.pem",
+    cert_key_pairs = [
+        (Path("/app/certs/cert.pem"), Path("/app/certs/key.pem")),
+        (base_dir / "certs" / "cert.pem", base_dir / "certs" / "key.pem"),
     ]
-    key_paths = [
-        Path("/app/certs/key.pem"),
-        base_dir / "certs" / "key.pem",
-    ]
-    return any(path.exists() for path in cert_paths) and any(path.exists() for path in key_paths)
+    return any(cert.exists() and key.exists() for cert, key in cert_key_pairs)
 
 
 class AppConfig(BaseModel):
@@ -53,23 +49,23 @@ class AppConfig(BaseModel):
     rate_limit_max_attempts: int = 5
 
     @classmethod
-    def from_env(cls) -> "AppConfig":
+    def from_env(cls) -> AppConfig:
         app_env = os.environ.get("APP_ENV", "production").lower()
         demo_mode = app_env != "production"
-        debug_mode = _parse_bool(os.environ.get("FLASK_DEBUG"), False)
-        trust_proxy = _parse_bool(os.environ.get("TRUST_PROXY"), app_env == "production")
-        enable_totp_test_endpoint = _parse_bool(
+        debug_mode = parse_bool(os.environ.get("FLASK_DEBUG"), False)
+        trust_proxy = parse_bool(os.environ.get("TRUST_PROXY"), app_env == "production")
+        enable_totp_test_endpoint = parse_bool(
             os.environ.get("ENABLE_TOTP_TEST_ENDPOINT"),
             demo_mode,
         )
-        enable_query_console = _parse_bool(
+        enable_query_console = parse_bool(
             os.environ.get("ENABLE_QUERY_CONSOLE"),
             demo_mode,
         )
         secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
-        session_cookie_secure = _parse_bool(
+        session_cookie_secure = parse_bool(
             os.environ.get("SESSION_COOKIE_SECURE"),
-            app_env == "production" or _ssl_cert_available(),
+            app_env == "production" or ssl_cert_available(),
         )
         session_cookie_samesite = os.environ.get("SESSION_COOKIE_SAMESITE", "Lax")
         preferred_url_scheme = "https" if app_env == "production" else None

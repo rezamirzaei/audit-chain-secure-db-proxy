@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
+import redis as redis_lib
 from cachelib.file import FileSystemCache
 from flask import Flask
 from flask_session import Session
-import redis as redis_lib
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import ProxyCloneConfig
@@ -22,19 +22,15 @@ class ProxyCloneBootstrap:
         app.config["SESSION_COOKIE_HTTPONLY"] = self._config.session_cookie_http_only
         app.config["SESSION_COOKIE_SECURE"] = self._config.session_cookie_secure
         app.config["SESSION_COOKIE_SAMESITE"] = self._config.session_cookie_samesite
-        self._apply_proxy(app)
-        self._configure_sessions(app)
+        self.apply_proxy(app)
+        self.configure_sessions(app)
         return app
 
-    def _apply_proxy(self, app: Flask) -> None:
+    def apply_proxy(self, app: Flask) -> None:
         if self._config.trust_proxy:
-            setattr(
-                app,
-                "wsgi_app",
-                ProxyFix(cast(Any, app.wsgi_app), x_for=1, x_proto=1, x_host=1, x_port=1),
-            )
+            app.wsgi_app = ProxyFix(cast(Any, app.wsgi_app), x_for=1, x_proto=1, x_host=1, x_port=1)
 
-    def _configure_sessions(self, app: Flask) -> None:
+    def configure_sessions(self, app: Flask) -> None:
         if self._config.redis_url:
             app.config["SESSION_TYPE"] = "redis"
             app.config["SESSION_REDIS"] = redis_lib.from_url(self._config.redis_url)

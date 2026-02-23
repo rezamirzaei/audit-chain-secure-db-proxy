@@ -1,21 +1,10 @@
-import importlib
-import sys
-from pathlib import Path
-
 import pytest
 
-
-def _import_fresh(package_name: str):
-    for name in list(sys.modules):
-        if name == package_name or name.startswith(f"{package_name}."):
-            del sys.modules[name]
-    return importlib.import_module(f"{package_name}.app")
+from tests.support import import_fresh_app
 
 
 @pytest.fixture()
 def db_client(tmp_path, monkeypatch):
-    root_dir = Path(__file__).resolve().parents[1]
-
     monkeypatch.setenv("APP_ENV", "demo")
     monkeypatch.setenv("ENABLE_TOTP_TEST_ENDPOINT", "true")
     monkeypatch.setenv("ENABLE_QUERY_CONSOLE", "true")
@@ -27,15 +16,14 @@ def db_client(tmp_path, monkeypatch):
     monkeypatch.delenv("POSTGRES_DSN", raising=False)
     monkeypatch.delenv("REDIS_URL", raising=False)
 
-    sys.path.insert(0, str(root_dir))
-    module = _import_fresh("database_server")
+    module = import_fresh_app("database_server")
 
     module.app.testing = True
     with module.app.test_client() as client:
         yield client
 
 
-def _login_admin(client) -> None:
+def login_admin(client) -> None:
     totp = client.get("/api/totp/current?username=admin").get_json()["totp_token"]
 
     resp = client.post(
@@ -68,7 +56,7 @@ def test_database_api_rejects_invalid_json_payloads(db_client):
     assert login_json["error"] == "Invalid request payload"
     assert login_json["details"]
 
-    _login_admin(db_client)
+    login_admin(db_client)
     query_resp = db_client.post("/api/query", json={"query": "   "})
     assert query_resp.status_code == 400
     query_json = query_resp.get_json()
@@ -77,7 +65,7 @@ def test_database_api_rejects_invalid_json_payloads(db_client):
 
 
 def test_login_flow_query_and_audit(db_client):
-    _login_admin(db_client)
+    login_admin(db_client)
 
     tables_resp = db_client.get("/api/tables")
     assert tables_resp.status_code == 200
@@ -101,7 +89,7 @@ def test_login_flow_query_and_audit(db_client):
 
 
 def test_table_endpoint_validates_path_and_pagination_params(db_client):
-    _login_admin(db_client)
+    login_admin(db_client)
 
     bad_limit = db_client.get("/api/table/employees?limit=0")
     assert bad_limit.status_code == 400

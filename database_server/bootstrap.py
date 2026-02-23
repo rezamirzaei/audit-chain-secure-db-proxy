@@ -4,10 +4,10 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
 
+import redis as redis_lib
 from cachelib.file import FileSystemCache
 from flask import Flask
 from flask_session import Session
-import redis as redis_lib
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import AppConfig
@@ -19,12 +19,12 @@ class AppBootstrap:
 
     def create_app(self) -> Flask:
         app = Flask(__name__)
-        self._apply_core_settings(app)
-        self._apply_proxy(app)
-        self._configure_sessions(app)
+        self.apply_core_settings(app)
+        self.apply_proxy(app)
+        self.configure_sessions(app)
         return app
 
-    def _apply_core_settings(self, app: Flask) -> None:
+    def apply_core_settings(self, app: Flask) -> None:
         app.secret_key = self._config.secret_key
         app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=self._config.permanent_session_hours)
         app.config["SESSION_COOKIE_NAME"] = self._config.session_cookie_name
@@ -34,22 +34,11 @@ class AppBootstrap:
         if self._config.preferred_url_scheme:
             app.config["PREFERRED_URL_SCHEME"] = self._config.preferred_url_scheme
 
-    def _apply_proxy(self, app: Flask) -> None:
+    def apply_proxy(self, app: Flask) -> None:
         if self._config.trust_proxy:
-            setattr(
-                app,
-                "wsgi_app",
-                ProxyFix(
-                    cast(Any, app.wsgi_app),
-                    x_for=1,
-                    x_proto=1,
-                    x_host=1,
-                    x_port=1,
-                    x_prefix=1,
-                ),
-            )
+            app.wsgi_app = ProxyFix(cast(Any, app.wsgi_app), x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 
-    def _configure_sessions(self, app: Flask) -> None:
+    def configure_sessions(self, app: Flask) -> None:
         if self._config.redis_url:
             app.config["SESSION_TYPE"] = "redis"
             app.config["SESSION_REDIS"] = redis_lib.from_url(self._config.redis_url)

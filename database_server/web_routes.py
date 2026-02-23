@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from flask import Flask, redirect, render_template, request, session, url_for
@@ -9,6 +10,15 @@ from sqlalchemy.orm import aliased
 
 from .models import AuditLog, AuthUser, Department, Employee, Project
 from .services import UserService
+
+LOGIN_BUCKET = "login"
+
+
+@dataclass(frozen=True)
+class PendingUserContext:
+    db_session: Any
+    user_service: UserService
+    user: Any
 
 
 class DatabaseWebRoutes:
@@ -35,6 +45,16 @@ class DatabaseWebRoutes:
         self.complete_login = complete_login
         self.debug_log = debug_log
 
+    @staticmethod
+    def pending_user_id() -> int | None:
+        raw_user_id = session.get("pending_user_id")
+        if raw_user_id is None:
+            return None
+        try:
+            return int(raw_user_id)
+        except (TypeError, ValueError):
+            return None
+
     def register(self) -> None:
         self.app.add_url_rule("/", view_func=self.index)
         self.app.add_url_rule("/login", view_func=self.login, methods=["GET", "POST"])
@@ -48,115 +68,25 @@ class DatabaseWebRoutes:
         self.app.add_url_rule("/query", view_func=self.login_required(self.query_page))
         self.app.add_url_rule("/audit", view_func=self.login_required(self.audit_log_page))
 
-    def index(self):
-        if "user_id" in session:
-            return redirect(url_for("dashboard"))
+    @staticmethod
+    def redirect_login():
         return redirect(url_for("login"))
 
-    def login(self):
-        error = None
+    @staticmethod
+    def redirect_dashboard():
+        return redirect(url_for("dashboard"))
 
-        if request.method == "POST":
-            if self.is_rate_limited("login"):
-                error = "Too many login attempts. Please try again later."
-                return render_template("login.html", error=error)
+    @staticmethod
+    def pending_login_step_expected_for_security() -> str:
+        return "totp_verified" if session.get("pending_totp_enabled") else "password_verified"
 
-            username = request.form.get("username")
-            password = request.form.get("password")
-
-            db_session = self.get_db()
-            user_service = UserService(db_session)
-            user = user_service.get_by_username(username or "")
-
-            if user and self.runtime.password_service.verify_and_upgrade(db_session, user, "password", password):
-                session["pending_user_id"] = user.id
-                session["pending_username"] = user.username
-                session["pending_role"] = user.role
-                session["pending_totp_enabled"] = user.totp_enabled
-                session["auth_step"] = "password_verified"
-
-                if user.totp_enabled:
-                    return redirect(url_for("verify_2fa"))
-                if user.security_question:
-                    return redirect(url_for("verify_security"))
-
-                self.complete_login()
-                return redirect(url_for("dashboard"))
-
-            self.record_failed_attempt("login")
-            error = "Invalid username or password"
-
+    def render_login_page(self, *, error: str | None = None):
         return render_template("login.html", error=error)
 
-    def verify_2fa(self):
-        if "pending_user_id" not in session or session.get("auth_step") != "password_verified":
-            return redirect(url_for("login"))
-
-        error = None
-        if request.method == "POST":
-            if self.is_rate_limited("login"):
-                error = "Too many attempts. Please try again later."
-                return render_template("verify_2fa.html", error=error, username=session.get("pending_username"))
-
-            db_session = self.get_db()
-            user_service = UserService(db_session)
-            pending_user_id = session.get("pending_user_id")
-            user = user_service.get_by_id(int(pending_user_id))
-            if not user:
-                return redirect(url_for("login"))
-
-            totp_code = request.form.get("totp_code", "").strip()
-            if not totp_code or not totp_code.isdigit() or len(totp_code) != 6:
-                error = "Authentication code must be exactly 6 digits."
-            elif user.totp_secret and self.runtime.totp_service.verify(user.totp_secret, totp_code):
-                session["auth_step"] = "totp_verified"
-                if user.security_question:
-                    return redirect(url_for("verify_security"))
-                self.complete_login()
-                return redirect(url_for("dashboard"))
-            else:
-                self.record_failed_attempt("login")
-                error = "Invalid authentication code. Please try again."
-
+    def render_verify_2fa_page(self, *, error: str | None = None):
         return render_template("verify_2fa.html", error=error, username=session.get("pending_username"))
 
-    def verify_security(self):
-        expected_step = "totp_verified" if session.get("pending_totp_enabled") else "password_verified"
-        if "pending_user_id" not in session or session.get("auth_step") != expected_step:
-            return redirect(url_for("login"))
-
-        error = None
-        db_session = self.get_db()
-        user_service = UserService(db_session)
-        pending_user_id = session.get("pending_user_id")
-        user = user_service.get_by_id(int(pending_user_id))
-        if not user:
-            return redirect(url_for("login"))
-
-        question = user.security_question
-        if not question:
-            self.complete_login()
-            return redirect(url_for("dashboard"))
-
-        if request.method == "POST":
-            if self.is_rate_limited("login"):
-                error = "Too many attempts. Please try again later."
-                return render_template(
-                    "verify_security.html",
-                    error=error,
-                    question=question,
-                    username=session.get("pending_username"),
-                )
-
-            answer = request.form.get("security_answer", "").strip()
-            answer_norm = answer.lower()
-            if self.runtime.password_service.verify_and_upgrade(db_session, user, "security_answer", answer_norm):
-                self.complete_login()
-                return redirect(url_for("dashboard"))
-
-            self.record_failed_attempt("login")
-            error = "Incorrect security answer. Please try again."
-
+    def render_verify_security_page(self, *, question: str, error: str | None = None):
         return render_template(
             "verify_security.html",
             error=error,
@@ -164,14 +94,55 @@ class DatabaseWebRoutes:
             username=session.get("pending_username"),
         )
 
-    def logout(self):
-        self.log_action("logout")
-        session.clear()
-        return redirect(url_for("login"))
+    def is_login_bucket_rate_limited(self) -> bool:
+        return self.is_rate_limited(LOGIN_BUCKET)
 
-    def dashboard(self):
+    def record_login_failure(self) -> None:
+        self.record_failed_attempt(LOGIN_BUCKET)
+
+    def get_user_service(self, db_session: Any) -> UserService:
+        return UserService(db_session)
+
+    def pending_user_context(self) -> PendingUserContext | None:
         db_session = self.get_db()
-        stats = {
+        user_service = self.get_user_service(db_session)
+        pending_user_id = self.pending_user_id()
+        if pending_user_id is None:
+            return None
+        user = user_service.get_by_id(pending_user_id)
+        if user is None:
+            return None
+        return PendingUserContext(db_session=db_session, user_service=user_service, user=user)
+
+    @staticmethod
+    def set_pending_login_session(user: Any) -> None:
+        session["pending_user_id"] = user.id
+        session["pending_username"] = user.username
+        session["pending_role"] = user.role
+        session["pending_totp_enabled"] = user.totp_enabled
+        session["auth_step"] = "password_verified"
+
+    def complete_login_and_redirect_dashboard(self):
+        self.complete_login()
+        return self.redirect_dashboard()
+
+    def password_login_result(self, *, username: str, password: Any):
+        db_session = self.get_db()
+        user_service = self.get_user_service(db_session)
+        user = user_service.get_by_username(username)
+        if not user:
+            return None
+        if not self.runtime.password_service.verify_and_upgrade(db_session, user, "password", password):
+            return None
+        return user
+
+    @staticmethod
+    def is_valid_totp_code(code: str) -> bool:
+        return bool(code) and code.isdigit() and len(code) == 6
+
+    @staticmethod
+    def dashboard_stats_payload(db_session: Any) -> dict[str, Any]:
+        return {
             "employees": db_session.execute(select(func.count(Employee.id))).scalar_one(),
             "departments": db_session.execute(select(func.count(Department.id))).scalar_one(),
             "projects": db_session.execute(
@@ -182,7 +153,157 @@ class DatabaseWebRoutes:
             ).scalar_one()
             or 0,
         }
-        recent_employees = db_session.execute(select(Employee).order_by(Employee.hire_date.desc()).limit(5)).scalars().all()
+
+    @staticmethod
+    def recent_employees(db_session: Any, limit: int = 5) -> list[Employee]:
+        return (
+            db_session.execute(select(Employee).order_by(Employee.hire_date.desc()).limit(limit))
+            .scalars()
+            .all()
+        )
+
+    @staticmethod
+    def departments_payload(rows: list[tuple[Department, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": dept.id,
+                "name": dept.name,
+                "budget": dept.budget or 0,
+                "employee_count": int(employee_count or 0),
+            }
+            for dept, employee_count in rows
+        ]
+
+    @staticmethod
+    def projects_payload(rows: list[tuple[Project, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": project.id,
+                "name": project.name,
+                "description": project.description or "",
+                "department_name": department_name,
+                "start_date": project.start_date,
+                "end_date": project.end_date,
+                "status": project.status,
+            }
+            for project, department_name in rows
+        ]
+
+    @staticmethod
+    def audit_logs_payload(rows: list[tuple[AuditLog, Any]]) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": log.id,
+                "username": username,
+                "action": log.action,
+                "table_name": log.table_name,
+                "query": log.query,
+                "timestamp": log.timestamp,
+            }
+            for log, username in rows
+        ]
+
+    def index(self):
+        if "user_id" in session:
+            return self.redirect_dashboard()
+        return self.redirect_login()
+
+    def login(self):
+        error = None
+
+        if request.method == "POST":
+            if self.is_login_bucket_rate_limited():
+                error = "Too many login attempts. Please try again later."
+                return self.render_login_page(error=error)
+
+            username = request.form.get("username")
+            password = request.form.get("password")
+
+            user = self.password_login_result(username=username or "", password=password)
+
+            if user:
+                self.set_pending_login_session(user)
+
+                if user.totp_enabled:
+                    return redirect(url_for("verify_2fa"))
+                if user.security_question:
+                    return redirect(url_for("verify_security"))
+
+                return self.complete_login_and_redirect_dashboard()
+
+            self.record_login_failure()
+            error = "Invalid username or password"
+
+        return self.render_login_page(error=error)
+
+    def verify_2fa(self):
+        if "pending_user_id" not in session or session.get("auth_step") != "password_verified":
+            return self.redirect_login()
+
+        error = None
+        if request.method == "POST":
+            if self.is_login_bucket_rate_limited():
+                error = "Too many attempts. Please try again later."
+                return self.render_verify_2fa_page(error=error)
+
+            context = self.pending_user_context()
+            if context is None:
+                return self.redirect_login()
+
+            totp_code = request.form.get("totp_code", "").strip()
+            if not self.is_valid_totp_code(totp_code):
+                error = "Authentication code must be exactly 6 digits."
+            elif context.user.totp_secret and self.runtime.totp_service.verify(context.user.totp_secret, totp_code):
+                session["auth_step"] = "totp_verified"
+                if context.user.security_question:
+                    return redirect(url_for("verify_security"))
+                return self.complete_login_and_redirect_dashboard()
+            else:
+                self.record_login_failure()
+                error = "Invalid authentication code. Please try again."
+
+        return self.render_verify_2fa_page(error=error)
+
+    def verify_security(self):
+        expected_step = self.pending_login_step_expected_for_security()
+        if "pending_user_id" not in session or session.get("auth_step") != expected_step:
+            return self.redirect_login()
+
+        error = None
+        context = self.pending_user_context()
+        if context is None:
+            return self.redirect_login()
+
+        question = context.user.security_question
+        if not question:
+            return self.complete_login_and_redirect_dashboard()
+
+        if request.method == "POST":
+            if self.is_login_bucket_rate_limited():
+                error = "Too many attempts. Please try again later."
+                return self.render_verify_security_page(question=question, error=error)
+
+            answer = request.form.get("security_answer", "").strip()
+            answer_norm = answer.lower()
+            if self.runtime.password_service.verify_and_upgrade(
+                context.db_session, context.user, "security_answer", answer_norm
+            ):
+                return self.complete_login_and_redirect_dashboard()
+
+            self.record_login_failure()
+            error = "Incorrect security answer. Please try again."
+
+        return self.render_verify_security_page(question=question, error=error)
+
+    def logout(self):
+        self.log_action("logout")
+        session.clear()
+        return self.redirect_login()
+
+    def dashboard(self):
+        db_session = self.get_db()
+        stats = self.dashboard_stats_payload(db_session)
+        recent_employees = self.recent_employees(db_session)
         return render_template("dashboard.html", stats=stats, recent_employees=recent_employees)
 
     def employees(self):
@@ -203,15 +324,7 @@ class DatabaseWebRoutes:
             .group_by(Department.id)
             .order_by(Department.name)
         ).all()
-        departments_payload = [
-            {
-                "id": dept.id,
-                "name": dept.name,
-                "budget": dept.budget or 0,
-                "employee_count": int(employee_count or 0),
-            }
-            for dept, employee_count in rows
-        ]
+        departments_payload = self.departments_payload(rows)
         return render_template("departments.html", departments=departments_payload)
 
     def projects(self):
@@ -222,28 +335,17 @@ class DatabaseWebRoutes:
             .outerjoin(dept_alias, Project.department_id == dept_alias.id)
             .order_by(Project.start_date.desc())
         ).all()
-        projects_payload = [
-            {
-                "id": project.id,
-                "name": project.name,
-                "description": project.description or "",
-                "department_name": department_name,
-                "start_date": project.start_date,
-                "end_date": project.end_date,
-                "status": project.status,
-            }
-            for project, department_name in rows
-        ]
+        projects_payload = self.projects_payload(rows)
         return render_template("projects.html", projects=projects_payload)
 
     def query_page(self):
         if not self.runtime.config.enable_query_console:
-            return redirect(url_for("dashboard"))
+            return self.redirect_dashboard()
         return render_template("query.html")
 
     def audit_log_page(self):
         if session.get("role") != "admin":
-            return redirect(url_for("dashboard"))
+            return self.redirect_dashboard()
 
         db_session = self.get_db()
         rows = db_session.execute(
@@ -252,15 +354,5 @@ class DatabaseWebRoutes:
             .order_by(AuditLog.timestamp.desc())
             .limit(100)
         ).all()
-        logs = [
-            {
-                "id": log.id,
-                "username": username,
-                "action": log.action,
-                "table_name": log.table_name,
-                "query": log.query,
-                "timestamp": log.timestamp,
-            }
-            for log, username in rows
-        ]
+        logs = self.audit_logs_payload(rows)
         return render_template("audit.html", logs=logs)

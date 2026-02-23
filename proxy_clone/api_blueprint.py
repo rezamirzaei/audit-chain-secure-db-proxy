@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Protocol
 
 from flask import Blueprint, Response, jsonify, request
-
 
 DecoratorFunc = Callable[[Any], Any]
 ApiServiceFactory = Callable[[], Any]
@@ -22,68 +22,118 @@ class ProxyApiBlueprintDependencies:
     vault: Any
 
 
-def create_api_blueprint(deps: ProxyApiBlueprintDependencies) -> Blueprint:
-    bp = Blueprint("proxy_api", __name__, url_prefix="/api")
+class RequestValidatorLike(Protocol):
+    def parse_json(self, request_obj: Any, model: Any) -> Any: ...
+    def parse_mapping(self, payload: dict[str, Any], model: Any, *, source: str) -> Any: ...
 
-    request_validator = deps.request_validator
-    connect_request_model = deps.connect_request_model
-    query_request_model = deps.query_request_model
-    table_path_model = deps.table_path_model
 
-    @bp.route("/health", methods=["GET"])
-    @deps.feature_enabled
-    def api_health():
-        return jsonify(deps.api_service_factory().health())
+class VaultLike(Protocol):
+    def ensure_session(self) -> bool: ...
+    def proxy_request(self, method: str, path: str, **kwargs: Any) -> Any | None: ...
 
-    @bp.route("/status", methods=["GET"])
-    @deps.feature_enabled
-    @deps.proxy_status_available
-    def api_status():
-        return jsonify(deps.api_service_factory().status())
 
-    @bp.route("/connect", methods=["POST"])
-    @deps.feature_enabled
-    def api_connect():
-        payload = request_validator.parse_json(request, connect_request_model)
-        body, status = deps.api_service_factory().connect(payload)
-        return jsonify(body), status
+class ProxyApiController:
+    def __init__(self, deps: ProxyApiBlueprintDependencies) -> None:
+        self.deps = deps
+        self.request_validator: RequestValidatorLike = deps.request_validator
+        self.vault: VaultLike = deps.vault
+        self.connect_request_model = deps.connect_request_model
+        self.query_request_model = deps.query_request_model
+        self.table_path_model = deps.table_path_model
 
-    @bp.route("/query", methods=["POST"])
-    @deps.feature_enabled
-    def api_query():
-        vault = deps.vault
-        if not vault.ensure_session():
-            return jsonify({"error": "Not connected to database server"}), 401
+    def api_service(self) -> Any:
+        return self.deps.api_service_factory()
 
-        payload = request_validator.parse_json(request, query_request_model)
-        response = vault.proxy_request("POST", "/api/query", json={"query": payload.query})
+    def require_proxy_session(self, not_connected_message: str) -> tuple[VaultLike | None, Any | None]:
+        if self.vault.ensure_session():
+            return self.vault, None
+        return None, (jsonify({"error": not_connected_message}), 401)
+
+    @staticmethod
+    def json_proxy_response(response: Any, *, failure_message: str) -> Response | tuple[Any, int]:
         if response is None:
-            return jsonify({"error": "Failed to connect to database server"}), 503
+            return jsonify({"error": failure_message}), 503
         return Response(response.content, content_type="application/json", status=response.status_code)
 
-    @bp.route("/tables", methods=["GET"])
-    @deps.feature_enabled
-    def api_tables():
-        vault = deps.vault
-        if not vault.ensure_session():
-            return jsonify({"error": "Not connected"}), 401
+    def health(self):
+        return jsonify(self.api_service().health())
+
+    def status(self):
+        return jsonify(self.api_service().status())
+
+    def connect(self):
+        payload = self.request_validator.parse_json(request, self.connect_request_model)
+        body, status = self.api_service().connect(payload)
+        return jsonify(body), status
+
+    def query(self):
+        vault, error_response = self.require_proxy_session("Not connected to database server")
+        if error_response is not None:
+            return error_response
+
+        payload = self.request_validator.parse_json(request, self.query_request_model)
+        response = vault.proxy_request("POST", "/api/query", json={"query": payload.query})
+        return self.json_proxy_response(response, failure_message="Failed to connect to database server")
+
+    def tables(self):
+        vault, error_response = self.require_proxy_session("Not connected")
+        if error_response is not None:
+            return error_response
 
         response = vault.proxy_request("GET", "/api/tables")
-        if response is None:
-            return jsonify({"error": "Failed to connect"}), 503
-        return Response(response.content, content_type="application/json")
+        return self.json_proxy_response(response, failure_message="Failed to connect")
 
-    @bp.route("/table/<table_name>", methods=["GET"])
-    @deps.feature_enabled
-    def api_table_data(table_name: str):
-        vault = deps.vault
-        if not vault.ensure_session():
-            return jsonify({"error": "Not connected"}), 401
+    def table_data(self, table_name: str):
+        vault, error_response = self.require_proxy_session("Not connected")
+        if error_response is not None:
+            return error_response
 
-        path_params = request_validator.parse_mapping({"table_name": table_name}, table_path_model, source="path")
+        path_params = self.request_validator.parse_mapping(
+            {"table_name": table_name},
+            self.table_path_model,
+            source="path",
+        )
         response = vault.proxy_request("GET", f"/api/table/{path_params.table_name}")
-        if response is None:
-            return jsonify({"error": "Failed to connect"}), 503
-        return Response(response.content, content_type="application/json")
+        return self.json_proxy_response(response, failure_message="Failed to connect")
+
+
+def create_api_blueprint(deps: ProxyApiBlueprintDependencies) -> Blueprint:
+    bp = Blueprint("proxy_api", __name__, url_prefix="/api")
+    controller = ProxyApiController(deps)
+
+    feature_enabled = deps.feature_enabled
+    proxy_status_available = deps.proxy_status_available
+
+    bp.add_url_rule("/health", endpoint="api_health", view_func=feature_enabled(controller.health), methods=["GET"])
+    bp.add_url_rule(
+        "/status",
+        endpoint="api_status",
+        view_func=feature_enabled(proxy_status_available(controller.status)),
+        methods=["GET"],
+    )
+    bp.add_url_rule(
+        "/connect",
+        endpoint="api_connect",
+        view_func=feature_enabled(controller.connect),
+        methods=["POST"],
+    )
+    bp.add_url_rule(
+        "/query",
+        endpoint="api_query",
+        view_func=feature_enabled(controller.query),
+        methods=["POST"],
+    )
+    bp.add_url_rule(
+        "/tables",
+        endpoint="api_tables",
+        view_func=feature_enabled(controller.tables),
+        methods=["GET"],
+    )
+    bp.add_url_rule(
+        "/table/<table_name>",
+        endpoint="api_table_data",
+        view_func=feature_enabled(controller.table_data),
+        methods=["GET"],
+    )
 
     return bp

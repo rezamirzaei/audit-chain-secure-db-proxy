@@ -1,13 +1,29 @@
 from __future__ import annotations
 
-from datetime import datetime
 import hashlib
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import MetaData, Table, func, inspect, select, text
 from sqlalchemy.orm import Session
 
 from .models import AuditLog, AuthUser
+
+
+def build_audit_payload(
+    prev_hash: str,
+    *,
+    timestamp: str,
+    user_id: int | None,
+    action: str | None,
+    table_name: str | None,
+    query: str | None,
+) -> str:
+    return f"{prev_hash}|{timestamp}|{user_id}|{action}|{table_name or ''}|{query or ''}"
+
+
+def hash_audit_payload(payload: str) -> str:
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 class UserService:
@@ -29,8 +45,15 @@ class AuditService:
         prev_row = self.session.execute(select(AuditLog).order_by(AuditLog.id.desc()).limit(1)).scalar_one_or_none()
         prev_hash = prev_row.entry_hash if prev_row and prev_row.entry_hash else ""
         ts = datetime.utcnow()
-        payload = f"{prev_hash}|{ts.isoformat()}|{user_id}|{action}|{table_name or ''}|{query or ''}"
-        entry_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        payload = build_audit_payload(
+            prev_hash,
+            timestamp=ts.isoformat(),
+            user_id=user_id,
+            action=action,
+            table_name=table_name,
+            query=query,
+        )
+        entry_hash = hash_audit_payload(payload)
         self.session.add(
             AuditLog(
                 user_id=user_id,
@@ -49,8 +72,15 @@ class AuditService:
         prev_hash = ""
         for row in rows:
             timestamp = row.timestamp.isoformat() if isinstance(row.timestamp, datetime) else str(row.timestamp)
-            payload = f"{prev_hash}|{timestamp}|{row.user_id}|{row.action}|{row.table_name or ''}|{row.query or ''}"
-            expected = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+            payload = build_audit_payload(
+                prev_hash,
+                timestamp=timestamp,
+                user_id=row.user_id,
+                action=row.action,
+                table_name=row.table_name,
+                query=row.query,
+            )
+            expected = hash_audit_payload(payload)
             if row.entry_hash != expected:
                 return False, {"id": row.id, "expected": expected, "actual": row.entry_hash}
             prev_hash = row.entry_hash or ""
