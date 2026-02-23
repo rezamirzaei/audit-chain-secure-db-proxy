@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class _StrictModel(BaseModel):
@@ -61,6 +61,10 @@ class _ResponseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class _ParamModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=False)
+
+
 class ApiErrorResponse(_ResponseModel):
     error: str
 
@@ -89,3 +93,7 @@ class VaultStatusResponse(_ResponseModel):
     last_login: str | None = None
     active: bool | None = None
     auth_state: dict[str, Any]
+
+
+class TablePathParams(_ParamModel):
+    table_name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")

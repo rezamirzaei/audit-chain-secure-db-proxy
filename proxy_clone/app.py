@@ -52,6 +52,7 @@ _api_services_module = _load_sibling_module("api_services")
 
 ConnectApiRequest = _api_schemas_module.ConnectApiRequest
 QueryApiRequest = _api_schemas_module.QueryApiRequest
+TablePathParams = _api_schemas_module.TablePathParams
 RequestValidator = _api_validation_module.RequestValidator
 RequestPayloadValidationError = _api_validation_module.RequestPayloadValidationError
 ProxyApiService = _api_services_module.ProxyApiService
@@ -762,7 +763,9 @@ def api_table_data(table_name):
     if not vault.ensure_session():
         return jsonify({'error': 'Not connected'}), 401
 
-    response = vault.proxy_request('GET', f'/api/table/{table_name}')
+    path_params = RequestValidator.parse_mapping({'table_name': table_name}, TablePathParams, source='path')
+
+    response = vault.proxy_request('GET', f'/api/table/{path_params.table_name}')
 
     if response is None:
         return jsonify({'error': 'Failed to connect'}), 503

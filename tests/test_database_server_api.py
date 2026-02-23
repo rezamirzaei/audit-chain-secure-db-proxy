@@ -102,3 +102,15 @@ def test_login_flow_query_and_audit(db_client):
     audit_resp = db_client.get("/api/audit/verify")
     assert audit_resp.status_code == 200
     assert audit_resp.get_json()["valid"] is True
+
+
+def test_table_endpoint_validates_path_and_pagination_params(db_client):
+    _login_admin(db_client)
+
+    bad_limit = db_client.get("/api/table/employees?limit=0")
+    assert bad_limit.status_code == 400
+    assert bad_limit.get_json()["error"] == "Invalid request payload"
+
+    bad_name = db_client.get("/api/table/employees-drop")
+    assert bad_name.status_code == 400
+    assert bad_name.get_json()["error"] == "Invalid request payload"

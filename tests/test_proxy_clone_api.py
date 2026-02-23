@@ -84,6 +84,14 @@ def test_proxy_api_rejects_invalid_json_payloads(proxy_client):
     assert extra_field_resp.get_json()["error"] == "Invalid request payload"
 
 
+def test_proxy_table_endpoint_validates_table_name(proxy_client, proxy_module_demo, monkeypatch):
+    monkeypatch.setattr(proxy_module_demo.CredentialVault, "ensure_session", lambda self: True)
+
+    resp = proxy_client.get("/api/table/not-valid-name")
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Invalid request payload"
+
+
 def test_proxy_status_shape_is_sanitized_after_connect(proxy_client, proxy_module_demo, monkeypatch):
     def fake_login(self, totp_code=None, security_answer=None):
         self.auth_state = {"current_step": "waiting_totp"}

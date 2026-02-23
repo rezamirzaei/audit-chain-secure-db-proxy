@@ -61,6 +61,8 @@ HealthResponse = _api_schemas_module.HealthResponse
 SessionResponse = _api_schemas_module.SessionResponse
 TotpCurrentResponse = _api_schemas_module.TotpCurrentResponse
 LogoutResponse = _api_schemas_module.LogoutResponse
+TablePathParams = _api_schemas_module.TablePathParams
+TablePaginationParams = _api_schemas_module.TablePaginationParams
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(32))
@@ -598,9 +600,13 @@ def api_query():
 @login_required
 def api_table_data(table_name):
     """Get data from a specific table"""
-    limit = request.args.get('limit', 100, type=int)
-    offset = request.args.get('offset', 0, type=int)
-    body, status = _api_service().table_data(table_name, limit, offset)
+    path_params = RequestValidator.parse_mapping({'table_name': table_name}, TablePathParams, source='path')
+    page_params = RequestValidator.parse_mapping(
+        {'limit': request.args.get('limit', 100), 'offset': request.args.get('offset', 0)},
+        TablePaginationParams,
+        source='query',
+    )
+    body, status = _api_service().table_data(path_params.table_name, page_params.limit, page_params.offset)
     return jsonify(body), status
 
 
