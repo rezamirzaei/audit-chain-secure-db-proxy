@@ -17,6 +17,8 @@ dependencies = [
     "requests==2.31.0",
     "urllib3>=2,<3",
     "pydantic>=2.12,<3",
+    "SQLAlchemy>=2.0,<3",
+    "alembic>=1.13,<2",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +26,8 @@ dev = [
     "pytest==8.3.4",
     "ruff==0.9.2",
     "mypy==1.19.1",
+    "SQLAlchemy>=2.0,<3",
+    "alembic>=1.13,<2",
 ]
 
 [tool.pytest.ini_options]
@@ -52,5 +56,8 @@ module = [
     "flask_session",
     "psycopg2",
     "psycopg2.*",
+    "alembic",
+    "sqlalchemy",
+    "sqlalchemy.*",
 ]
 ignore_missing_imports = true
