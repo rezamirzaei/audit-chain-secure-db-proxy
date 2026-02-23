@@ -5,8 +5,8 @@
 
 {% block content %}
 <div id="db-query-console"
-     data-api-tables-url="{{ url_for('api_tables') }}"
-     data-api-query-url="{{ url_for('api_query') }}">
+     data-api-tables-url="{{ url_for('database_api.api_tables') }}"
+     data-api-query-url="{{ url_for('database_api.api_query') }}">
 <div class="row g-4">
     <div class="col-md-8">
         <div class="card">

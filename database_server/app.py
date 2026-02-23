@@ -44,6 +44,7 @@ _db_module = _load_sibling_module("db")
 _api_schemas_module = _load_sibling_module("api_schemas")
 _api_validation_module = _load_sibling_module("api_validation")
 _api_services_module = _load_sibling_module("api_services")
+_api_blueprint_module = _load_sibling_module("api_blueprint")
 
 get_totp_token = _auth_module.get_totp_token
 verify_totp = _auth_module.verify_totp
@@ -57,6 +58,7 @@ QueryApiRequest = _api_schemas_module.QueryApiRequest
 RequestValidator = _api_validation_module.RequestValidator
 RequestPayloadValidationError = _api_validation_module.RequestPayloadValidationError
 DatabaseApiService = _api_services_module.DatabaseApiService
+create_api_blueprint = _api_blueprint_module.create_api_blueprint
 HealthResponse = _api_schemas_module.HealthResponse
 SessionResponse = _api_schemas_module.SessionResponse
 TotpCurrentResponse = _api_schemas_module.TotpCurrentResponse
@@ -516,100 +518,6 @@ def audit_log_page():
     return render_template('audit.html', logs=logs)
 
 
-# ==================== API Endpoints ====================
-
-@app.route('/api/health')
-def api_health():
-    """Health check endpoint"""
-    payload = HealthResponse(status='healthy', timestamp=datetime.now().isoformat(), database='connected')
-    return jsonify(payload.model_dump(mode='json'))
-
-
-@app.route('/api/session')
-def api_session():
-    """Get current session info"""
-    if 'user_id' not in session:
-        payload = SessionResponse(authenticated=False)
-        return jsonify(payload.model_dump(mode='json'))
-
-    payload = SessionResponse(
-        authenticated=True,
-        user_id=int(session['user_id']),
-        username=str(session['username']),
-        role=str(session['role']),
-        login_time=cast(str | None, session.get('login_time')),
-    )
-    return jsonify(payload.model_dump(mode='json'))
-
-
-@app.route('/api/login', methods=['POST'])
-def api_login():
-    """API login endpoint - supports multi-step authentication"""
-    payload = RequestValidator.parse_json(request, LoginApiRequest)
-    body, status = _api_service().login(payload)
-    return jsonify(body), status
-
-
-@app.route('/api/totp/current')
-def api_totp_current():
-    """Get current TOTP token (for testing/demo only - remove in production!)"""
-    if not ENABLE_TOTP_TEST_ENDPOINT:
-        return jsonify({'error': 'Not found'}), 404
-    username = request.args.get('username', 'admin')
-    db = get_db()
-    user = db.execute("SELECT totp_secret FROM auth_users WHERE username = ?", (username,)).fetchone()
-
-    if user and user['totp_secret']:
-        payload = TotpCurrentResponse(
-            username=username,
-            totp_token=get_totp_token(user['totp_secret']),
-            valid_for_seconds=30 - (int(time.time()) % 30),
-        )
-        return jsonify(payload.model_dump(mode='json'))
-    return jsonify({'error': 'User not found'}), 404
-
-
-@app.route('/api/logout', methods=['POST'])
-@login_required
-def api_logout():
-    """API logout endpoint"""
-    log_action('api_logout')
-    session.clear()
-    payload = LogoutResponse(success=True)
-    return jsonify(payload.model_dump(mode='json'))
-
-
-@app.route('/api/tables')
-@login_required
-def api_tables():
-    """Get list of tables"""
-    body, status = _api_service().tables()
-    return jsonify(body), status
-
-
-@app.route('/api/query', methods=['POST'])
-@login_required
-def api_query():
-    """Execute a SQL query"""
-    payload = RequestValidator.parse_json(request, QueryApiRequest)
-    body, status = _api_service().query(payload)
-    return jsonify(body), status
-
-
-@app.route('/api/table/<table_name>')
-@login_required
-def api_table_data(table_name):
-    """Get data from a specific table"""
-    path_params = RequestValidator.parse_mapping({'table_name': table_name}, TablePathParams, source='path')
-    page_params = RequestValidator.parse_mapping(
-        {'limit': request.args.get('limit', 100), 'offset': request.args.get('offset', 0)},
-        TablePaginationParams,
-        source='query',
-    )
-    body, status = _api_service().table_data(path_params.table_name, page_params.limit, page_params.offset)
-    return jsonify(body), status
-
-
 def verify_audit_chain():
     """Verify tamper-evident audit hash chain"""
     db = get_db()
@@ -626,14 +534,28 @@ def verify_audit_chain():
     return True, None
 
 
-@app.route('/api/audit/verify')
-@login_required
-def api_audit_verify():
-    """Admin-only: verify audit log integrity"""
-    if session.get('role') != 'admin':
-        return jsonify({'error': 'Forbidden'}), 403
-    valid, info = verify_audit_chain()
-    return jsonify(_api_service().audit_verify(valid, info))
+app.register_blueprint(
+    create_api_blueprint(
+        {
+            'request_validator': RequestValidator,
+            'login_request_model': LoginApiRequest,
+            'query_request_model': QueryApiRequest,
+            'table_path_model': TablePathParams,
+            'table_pagination_model': TablePaginationParams,
+            'health_response_model': HealthResponse,
+            'session_response_model': SessionResponse,
+            'totp_response_model': TotpCurrentResponse,
+            'logout_response_model': LogoutResponse,
+            'api_service_factory': _api_service,
+            'enable_totp_test_endpoint': ENABLE_TOTP_TEST_ENDPOINT,
+            'get_db': get_db,
+            'get_totp_token': get_totp_token,
+            'login_required': login_required,
+            'log_action': log_action,
+            'verify_audit_chain': verify_audit_chain,
+        }
+    )
+)
 
 
 # Initialize database on startup
