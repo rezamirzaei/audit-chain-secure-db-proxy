@@ -1,121 +1,173 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
 
 
-def register_web_routes(app: Flask, deps: dict[str, Any]) -> None:
-    vault = deps["vault"]
-    feature_enabled = deps["feature_enabled"]
-    proxy_authenticated = deps["proxy_authenticated"]
-    drop_current_vault = deps["drop_current_vault"]
-    debug = deps["debug"]
-    proxy_features_enabled = deps["proxy_features_enabled"]
+class ProxyWebController:
+    def __init__(
+        self,
+        *,
+        vault: Any,
+        drop_current_vault: Callable[[], None],
+        debug: Callable[..., None],
+        proxy_features_enabled: bool,
+    ) -> None:
+        self.vault = vault
+        self.drop_current_vault = drop_current_vault
+        self.debug = debug
+        self.proxy_features_enabled = proxy_features_enabled
 
-    @app.route("/")
-    def home():
+    def home(self):
         """Proxy's home page - query interface for end users."""
-        if not proxy_features_enabled:
+        if not self.proxy_features_enabled:
             return jsonify({"error": "Proxy demo features are disabled in production"}), 404
-        status = vault.get_status()
+        status = self.vault.get_status()
         return render_template("home.html", status=status)
 
-    @app.route("/connect", methods=["GET", "POST"])
-    @feature_enabled
-    def connect():
+    def connect(self):
         """Page to capture/enter credentials - handles multi-step auth."""
+        step = self.read_connect_step()
+        self.log_connect_state(step)
+
+        redirect_response = self.guard_connect_step(step)
+        if redirect_response is not None:
+            return redirect_response
+
         error = None
-        status = vault.get_status()
-
-        if request.method == "GET":
-            step = request.args.get("step", "credentials")
-        else:
-            step = request.form.get("step", "credentials")
-
-        debug("connect() called - method=%s, step=%s", request.method, step)
-        debug("vault.auth_state = %s", vault.auth_state)
-        debug("vault.credentials = %s", bool(vault.credentials))
-
-        if step in ["totp", "security"] and not vault.credentials:
-            return redirect(url_for("connect", step="credentials"))
-
         if request.method == "POST":
-            if step == "credentials":
-                username = request.form.get("username")
-                password = request.form.get("password")
-                vault.store_credentials(username, password)
-                vault.auth_state = {}
-                result = vault.login()
-                debug("credentials login result: %s", result)
+            error, redirect_response = self.handle_connect_post(step)
+            if redirect_response is not None:
+                return redirect_response
 
-                if result.get("success"):
-                    return redirect(url_for("home"))
-                if result.get("requires_totp"):
-                    debug("Redirecting to totp step, auth_state = %s", vault.auth_state)
-                    return redirect(url_for("connect", step="totp"))
-                if result.get("requires_security"):
-                    session["security_question"] = result.get("security_question")
-                    return redirect(url_for("connect", step="security"))
-                error = result.get("error", "Failed to connect")
+        return self.render_connect(step=step, error=error)
 
-            elif step == "totp":
-                totp_code = request.form.get("totp_code", "").strip()
-                debug("totp step - totp_code=%s, auth_state=%s", totp_code, vault.auth_state)
+    def read_connect_step(self) -> str:
+        raw_step = request.args.get("step", "credentials") if request.method == "GET" else request.form.get(
+            "step", "credentials"
+        )
+        valid_steps = {"credentials", "totp", "security"}
+        if raw_step not in valid_steps:
+            return "credentials"
+        return str(raw_step)
 
-                if not totp_code:
-                    error = "Please enter the 2FA code"
-                elif not totp_code.isdigit() or len(totp_code) != 6:
-                    error = "2FA code must be exactly 6 digits"
-                else:
-                    result = vault.login(totp_code=totp_code)
-                    debug("totp login result: %s", result)
+    def log_connect_state(self, step: str) -> None:
+        self.debug("connect() called - method=%s, step=%s", request.method, step)
+        self.debug("vault.auth_state = %s", self.vault.auth_state)
+        self.debug("vault.credentials = %s", bool(self.vault.credentials))
 
-                    if result.get("success"):
-                        return redirect(url_for("home"))
-                    if result.get("requires_security"):
-                        session["security_question"] = result.get("security_question")
-                        return redirect(url_for("connect", step="security"))
-                    error = result.get("error", "Invalid 2FA code")
+    def guard_connect_step(self, step: str):
+        if step in {"totp", "security"} and not self.vault.credentials:
+            return self.redirect_connect_step("credentials")
+        return None
 
-            elif step == "security":
-                security_answer = request.form.get("security_answer", "").strip()
+    def handle_connect_post(self, step: str) -> tuple[str | None, Any | None]:
+        handlers: dict[str, Callable[[], tuple[str | None, Any | None]]] = {
+            "credentials": self.handle_credentials_submit,
+            "totp": self.handle_totp_submit,
+            "security": self.handle_security_submit,
+        }
+        handler = handlers.get(step)
+        if handler is None:
+            return None, None
+        return handler()
 
-                if not security_answer:
-                    error = "Please enter your security answer"
-                else:
-                    result = vault.login(security_answer=security_answer)
-                    debug("security login result: %s", result)
+    def handle_credentials_submit(self) -> tuple[str | None, Any | None]:
+        username = request.form.get("username")
+        password = request.form.get("password")
+        self.vault.store_credentials(username, password)
+        self.vault.auth_state = {}
 
-                    if result.get("success"):
-                        return redirect(url_for("home"))
-                    error = result.get("error", "Invalid security answer")
+        result = self.vault.login()
+        self.debug("credentials login result: %s", result)
+        return self.resolve_connect_result(
+            result,
+            default_error="Failed to connect",
+            allow_totp_redirect=True,
+            allow_security_redirect=True,
+            log_totp_redirect=True,
+        )
 
-        security_question = session.get("security_question") or vault.auth_state.get("security_question")
+    def handle_totp_submit(self) -> tuple[str | None, Any | None]:
+        totp_code = request.form.get("totp_code", "").strip()
+        self.debug("totp step - totp_code=%s, auth_state=%s", totp_code, self.vault.auth_state)
+
+        if not totp_code:
+            return "Please enter the 2FA code", None
+        if not totp_code.isdigit() or len(totp_code) != 6:
+            return "2FA code must be exactly 6 digits", None
+
+        result = self.vault.login(totp_code=totp_code)
+        self.debug("totp login result: %s", result)
+        return self.resolve_connect_result(
+            result,
+            default_error="Invalid 2FA code",
+            allow_totp_redirect=False,
+            allow_security_redirect=True,
+        )
+
+    def handle_security_submit(self) -> tuple[str | None, Any | None]:
+        security_answer = request.form.get("security_answer", "").strip()
+        if not security_answer:
+            return "Please enter your security answer", None
+
+        result = self.vault.login(security_answer=security_answer)
+        self.debug("security login result: %s", result)
+        return self.resolve_connect_result(
+            result,
+            default_error="Invalid security answer",
+            allow_totp_redirect=False,
+            allow_security_redirect=False,
+        )
+
+    def resolve_connect_result(
+        self,
+        result: dict[str, Any],
+        *,
+        default_error: str,
+        allow_totp_redirect: bool,
+        allow_security_redirect: bool,
+        log_totp_redirect: bool = False,
+    ) -> tuple[str | None, Any | None]:
+        if result.get("success"):
+            return None, redirect(url_for("home"))
+
+        if allow_totp_redirect and result.get("requires_totp"):
+            if log_totp_redirect:
+                self.debug("Redirecting to totp step, auth_state = %s", self.vault.auth_state)
+            return None, self.redirect_connect_step("totp")
+
+        if allow_security_redirect and result.get("requires_security"):
+            session["security_question"] = result.get("security_question")
+            return None, self.redirect_connect_step("security")
+
+        return str(result.get("error", default_error)), None
+
+    def redirect_connect_step(self, step: str):
+        return redirect(url_for("connect", step=step))
+
+    def render_connect(self, *, step: str, error: str | None):
+        security_question = session.get("security_question") or self.vault.auth_state.get("security_question")
         return render_template(
             "connect.html",
             error=error,
-            status=status,
+            status=self.vault.get_status(),
             step=step,
             security_question=security_question,
         )
 
-    @app.route("/disconnect", methods=["POST"])
-    @feature_enabled
-    def disconnect():
+    def disconnect(self):
         """Clear stored credentials and all captured auth info."""
-        vault.reset_auth(clear_credentials=True)
-        drop_current_vault()
+        self.vault.reset_auth(clear_credentials=True)
+        self.drop_current_vault()
         session.pop("security_question", None)
         return redirect(url_for("connect"))
 
-    @app.route("/mirror/")
-    @app.route("/mirror/<path:path>")
-    @feature_enabled
-    @proxy_authenticated
-    def mirror(path: str = ""):
+    def mirror(self, path: str = ""):
         """Mirror the original database server UI dynamically."""
-        response = vault.proxy_request("GET", f"/{path}")
+        response = self.vault.proxy_request("GET", f"/{path}")
         if response is None:
             return "Failed to connect to database server", 503
 
@@ -141,15 +193,12 @@ def register_web_routes(app: Flask, deps: dict[str, Any]) -> None:
 
         return Response(content, content_type=content_type, status=response.status_code)
 
-    @app.route("/mirror/api/<path:path>", methods=["GET", "POST"])
-    @feature_enabled
-    @proxy_authenticated
-    def mirror_api(path: str):
+    def mirror_api(self, path: str):
         """Mirror API calls to the database server."""
         if request.method == "POST":
-            response = vault.proxy_request("POST", f"/api/{path}", json=request.get_json())
+            response = self.vault.proxy_request("POST", f"/api/{path}", json=request.get_json())
         else:
-            response = vault.proxy_request("GET", f"/api/{path}")
+            response = self.vault.proxy_request("GET", f"/api/{path}")
 
         if response is None:
             return jsonify({"error": "Failed to connect to database server"}), 503
@@ -159,4 +208,41 @@ def register_web_routes(app: Flask, deps: dict[str, Any]) -> None:
             content_type=response.headers.get("Content-Type"),
             status=response.status_code,
         )
+
+
+def register_web_routes(app: Flask, deps: dict[str, Any]) -> None:
+    controller = ProxyWebController(
+        vault=deps["vault"],
+        drop_current_vault=deps["drop_current_vault"],
+        debug=deps["debug"],
+        proxy_features_enabled=deps["proxy_features_enabled"],
+    )
+    feature_enabled = deps["feature_enabled"]
+    proxy_authenticated = deps["proxy_authenticated"]
+
+    app.add_url_rule("/", endpoint="home", view_func=controller.home)
+    app.add_url_rule(
+        "/connect",
+        endpoint="connect",
+        view_func=feature_enabled(controller.connect),
+        methods=["GET", "POST"],
+    )
+    app.add_url_rule(
+        "/disconnect",
+        endpoint="disconnect",
+        view_func=feature_enabled(controller.disconnect),
+        methods=["POST"],
+    )
+
+    mirror_view = feature_enabled(proxy_authenticated(controller.mirror))
+    app.add_url_rule("/mirror/", endpoint="mirror", view_func=mirror_view, defaults={"path": ""})
+    app.add_url_rule("/mirror/<path:path>", endpoint="mirror", view_func=mirror_view)
+
+    mirror_api_view = feature_enabled(proxy_authenticated(controller.mirror_api))
+    app.add_url_rule(
+        "/mirror/api/<path:path>",
+        endpoint="mirror_api",
+        view_func=mirror_api_view,
+        methods=["GET", "POST"],
+    )
 
