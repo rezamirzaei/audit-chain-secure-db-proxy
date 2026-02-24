@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from flask import Flask, redirect, render_template, request, session, url_for
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import aliased
 
+from .api_auth_use_cases import AuthLoginUseCases
+from .api_schemas import LoginApiRequest
+from .api_support import ApiResponseFactory, LoginSessionState
 from .models import AuditLog, AuthUser, Department, Employee, Project
 from .services import UserService
 
@@ -44,6 +48,24 @@ class DatabaseWebRoutes:
         self.record_failed_attempt = record_failed_attempt
         self.complete_login = complete_login
         self.debug_log = debug_log
+
+    def auth_use_cases(self) -> AuthLoginUseCases:
+        db_session = self.get_db()
+        session_store = cast(MutableMapping[str, Any], session)
+        responses = ApiResponseFactory(session_store=session_store)
+        login_state = LoginSessionState(session_store=session_store)
+        return AuthLoginUseCases(
+            session_store=session_store,
+            db_session=db_session,
+            user_service=self.get_user_service(db_session),
+            password_service=self.runtime.password_service,
+            totp_service=self.runtime.totp_service,
+            complete_login=self.complete_login,
+            is_rate_limited=self.is_rate_limited,
+            record_failed_attempt=self.record_failed_attempt,
+            responses=responses,
+            login_state=login_state,
+        )
 
     @staticmethod
     def pending_user_id() -> int | None:
@@ -114,27 +136,9 @@ class DatabaseWebRoutes:
             return None
         return PendingUserContext(db_session=db_session, user_service=user_service, user=user)
 
-    @staticmethod
-    def set_pending_login_session(user: Any) -> None:
-        session["pending_user_id"] = user.id
-        session["pending_username"] = user.username
-        session["pending_role"] = user.role
-        session["pending_totp_enabled"] = user.totp_enabled
-        session["auth_step"] = "password_verified"
-
     def complete_login_and_redirect_dashboard(self):
         self.complete_login()
         return self.redirect_dashboard()
-
-    def password_login_result(self, *, username: str, password: Any):
-        db_session = self.get_db()
-        user_service = self.get_user_service(db_session)
-        user = user_service.get_by_username(username)
-        if not user:
-            return None
-        if not self.runtime.password_service.verify_and_upgrade(db_session, user, "password", password):
-            return None
-        return user
 
     @staticmethod
     def is_valid_totp_code(code: str) -> bool:
@@ -212,27 +216,24 @@ class DatabaseWebRoutes:
         error = None
 
         if request.method == "POST":
-            if self.is_login_bucket_rate_limited():
-                error = "Too many login attempts. Please try again later."
-                return self.render_login_page(error=error)
-
             username = request.form.get("username")
             password = request.form.get("password")
 
-            user = self.password_login_result(username=username or "", password=password)
-
-            if user:
-                self.set_pending_login_session(user)
-
-                if user.totp_enabled:
+            try:
+                payload = LoginApiRequest(step="password", username=username, password=password)
+            except ValidationError:
+                self.record_failed_attempt(LOGIN_BUCKET)
+                error = "Invalid username or password"
+            else:
+                body, status = self.auth_use_cases().login(payload)
+                if status == 200 and body.get("authenticated"):
+                    return self.redirect_dashboard()
+                next_step = body.get("next_step")
+                if status == 200 and next_step == "totp":
                     return redirect(url_for("verify_2fa"))
-                if user.security_question:
+                if status == 200 and next_step == "security":
                     return redirect(url_for("verify_security"))
-
-                return self.complete_login_and_redirect_dashboard()
-
-            self.record_login_failure()
-            error = "Invalid username or password"
+                error = str(body.get("error", "Invalid username or password"))
 
         return self.render_login_page(error=error)
 
@@ -242,25 +243,19 @@ class DatabaseWebRoutes:
 
         error = None
         if request.method == "POST":
-            if self.is_login_bucket_rate_limited():
-                error = "Too many attempts. Please try again later."
-                return self.render_verify_2fa_page(error=error)
-
-            context = self.pending_user_context()
-            if context is None:
-                return self.redirect_login()
-
             totp_code = request.form.get("totp_code", "").strip()
-            if not self.is_valid_totp_code(totp_code):
+            try:
+                payload = LoginApiRequest(step="totp", totp_code=totp_code)
+            except ValidationError:
+                self.record_failed_attempt(LOGIN_BUCKET)
                 error = "Authentication code must be exactly 6 digits."
-            elif context.user.totp_secret and self.runtime.totp_service.verify(context.user.totp_secret, totp_code):
-                session["auth_step"] = "totp_verified"
-                if context.user.security_question:
-                    return redirect(url_for("verify_security"))
-                return self.complete_login_and_redirect_dashboard()
             else:
-                self.record_login_failure()
-                error = "Invalid authentication code. Please try again."
+                body, status = self.auth_use_cases().login(payload)
+                if status == 200 and body.get("authenticated"):
+                    return self.redirect_dashboard()
+                if status == 200 and body.get("next_step") == "security":
+                    return redirect(url_for("verify_security"))
+                error = str(body.get("error", "Invalid authentication code. Please try again."))
 
         return self.render_verify_2fa_page(error=error)
 
@@ -279,19 +274,17 @@ class DatabaseWebRoutes:
             return self.complete_login_and_redirect_dashboard()
 
         if request.method == "POST":
-            if self.is_login_bucket_rate_limited():
-                error = "Too many attempts. Please try again later."
-                return self.render_verify_security_page(question=question, error=error)
-
             answer = request.form.get("security_answer", "").strip()
-            answer_norm = answer.lower()
-            if self.runtime.password_service.verify_and_upgrade(
-                context.db_session, context.user, "security_answer", answer_norm
-            ):
-                return self.complete_login_and_redirect_dashboard()
-
-            self.record_login_failure()
-            error = "Incorrect security answer. Please try again."
+            try:
+                payload = LoginApiRequest(step="security", security_answer=answer)
+            except ValidationError:
+                self.record_failed_attempt(LOGIN_BUCKET)
+                error = "Please enter your security answer"
+            else:
+                body, status = self.auth_use_cases().login(payload)
+                if status == 200 and body.get("authenticated"):
+                    return self.redirect_dashboard()
+                error = str(body.get("error", "Incorrect security answer. Please try again."))
 
         return self.render_verify_security_page(question=question, error=error)
 
