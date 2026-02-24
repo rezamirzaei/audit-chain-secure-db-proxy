@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from flask import Flask
 
 from proxy_clone.api_blueprint import ProxyApiBlueprintDependencies, ProxyApiController
+from proxy_clone.auth_guards import pending_connect_step
 from proxy_clone.state.credential_vault import CredentialVault
 from proxy_clone.web_routes import ProxyWebController
 
@@ -135,6 +136,10 @@ def test_proxy_web_controller_helpers_are_pure_and_predictable():
     assert "PROXY MIRROR" in rewritten
     assert 'href="/mirror/x"' in rewritten
     assert 'action="/mirror/api"' in rewritten
+
+    assert pending_connect_step({"current_step": "waiting_totp"}) == "totp"
+    assert pending_connect_step({"current_step": "waiting_security"}) == "security"
+    assert pending_connect_step({"current_step": "password"}) is None
 
 
 def test_proxy_web_controller_mirror_api_request_params_tracks_request_method():

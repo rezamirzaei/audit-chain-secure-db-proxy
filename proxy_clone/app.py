@@ -10,12 +10,12 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import wraps
 from typing import Any
 
-from flask import Flask, jsonify, redirect, session, url_for
+from flask import Flask, session
 from werkzeug.local import LocalProxy
 
+from .auth_guards import ProxyAuthGuards
 from .api_blueprint import ProxyApiBlueprintDependencies, create_api_blueprint
 from .api_schemas import ConnectApiRequest, QueryApiRequest, TablePathParams
 from .api_services import ProxyApiService
@@ -95,37 +95,9 @@ def create_app(
 
     feature_enabled = create_feature_enabled_decorator(config.proxy_features_enabled)
 
-    def redirect_for_pending_proxy_auth() -> str:
-        next_step = vault.auth_state.get("current_step")
-        if next_step == "waiting_totp":
-            return url_for("connect", step="totp")
-        if next_step == "waiting_security":
-            return url_for("connect", step="security")
-        return url_for("connect")
-
-    def proxy_authenticated(f):
-        """Decorator to ensure proxy has valid credentials."""
-
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            if not vault.credentials:
-                return redirect(url_for("connect"))
-            if not vault.ensure_session():
-                return redirect(redirect_for_pending_proxy_auth())
-            return f(*args, **kwargs)
-
-        return decorated_function
-
-    def proxy_status_available(f):
-        """Decorator for API status access after a proxy session has captured credentials."""
-
-        @wraps(f)
-        def decorated_function(*args, **kwargs):
-            if not vault.credentials:
-                return jsonify({"error": "Not connected"}), 401
-            return f(*args, **kwargs)
-
-        return decorated_function
+    guards = ProxyAuthGuards(vault=vault)
+    proxy_authenticated = guards.proxy_authenticated
+    proxy_status_available = guards.proxy_status_available
 
     def proxy_api_service() -> Any:
         return ProxyApiService(vault=vault, demo_mode=config.demo_mode)
@@ -187,4 +159,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
