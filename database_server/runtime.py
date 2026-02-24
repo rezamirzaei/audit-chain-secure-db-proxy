@@ -3,9 +3,9 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from .auth_utils import PasswordService, TotpService
-from .bootstrap import AppBootstrap
 from .config import AppConfig
 from .db import DatabaseSessionManager
 
@@ -34,20 +34,41 @@ class InMemoryRateLimiter:
         entries.append(now)
 
 
+@dataclass(frozen=True)
 class DatabaseServerRuntime:
-    def __init__(self, config: AppConfig | None = None) -> None:
-        self.config = config or AppConfig.from_env()
-        self.bootstrap = AppBootstrap(self.config)
-        self.app = self.bootstrap.create_app()
+    config: AppConfig
+    logger: logging.Logger
+    db_manager: DatabaseSessionManager
+    password_service: PasswordService
+    totp_service: TotpService
+    rate_limiter: InMemoryRateLimiter
 
-        logging.basicConfig(level=self.config.log_level)
-        self.logger = logging.getLogger("database_server")
 
-        self.db_manager = DatabaseSessionManager.from_env()
-        self.password_service = PasswordService()
-        self.totp_service = TotpService()
-        self.rate_limiter = InMemoryRateLimiter(
-            window_seconds=self.config.rate_limit_window_seconds,
-            max_attempts=self.config.rate_limit_max_attempts,
-        )
+def create_runtime(
+    config: AppConfig | None = None,
+    *,
+    db_manager: DatabaseSessionManager | None = None,
+    password_service: PasswordService | None = None,
+    totp_service: TotpService | None = None,
+    rate_limiter: InMemoryRateLimiter | None = None,
+) -> DatabaseServerRuntime:
+    config = config or AppConfig.from_env()
 
+    logging.basicConfig(level=config.log_level)
+    logger = logging.getLogger("database_server")
+
+    db_manager = db_manager or DatabaseSessionManager.from_env()
+    password_service = password_service or PasswordService()
+    totp_service = totp_service or TotpService()
+    rate_limiter = rate_limiter or InMemoryRateLimiter(
+        window_seconds=config.rate_limit_window_seconds,
+        max_attempts=config.rate_limit_max_attempts,
+    )
+    return DatabaseServerRuntime(
+        config=config,
+        logger=logger,
+        db_manager=db_manager,
+        password_service=password_service,
+        totp_service=totp_service,
+        rate_limiter=rate_limiter,
+    )

@@ -1,37 +1,35 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
 import requests
+
+from .auth_flow import (
+    PASSWORD_STEP,
+    WAITING_SECURITY_STEP,
+    WAITING_TOTP_STEP,
+    LoginAttempt,
+    LoginReply,
+    current_auth_step,
+    determine_login_attempt,
+    interpret_login_reply,
+)
+from .upstream_client import JsonDict, UpstreamClient
 
 LOGIN_REQUEST_TIMEOUT_SECONDS = 10
 SESSION_CHECK_TIMEOUT_SECONDS = 5
 PROXY_REQUEST_TIMEOUT_SECONDS = 30
 UPSTREAM_LOGIN_PATH = "/api/login"
 UPSTREAM_SESSION_PATH = "/api/session"
-PASSWORD_STEP = "password"
-WAITING_TOTP_STEP = "waiting_totp"
-WAITING_SECURITY_STEP = "waiting_security"
-INVALID_SESSION_STATE_FRAGMENT = "Invalid session state"
-
-JsonDict = dict[str, Any]
-LoginHandlerName = Literal["password", "totp", "security"]
-
-
-@dataclass(frozen=True)
-class LoginAttempt:
-    handler: LoginHandlerName
-    value: str | None = None
 
 
 class CredentialVault:
-    """
-    Stores captured credentials, auth factors, and upstream session cookies.
-    Handles the multi-step authentication flow to the database server.
-    """
+    """Stores captured credentials + upstream cookies and performs multi-step auth."""
+
+    # Keep this attribute for backwards compatibility with older tests/callers.
+    response_json = staticmethod(UpstreamClient.response_json)
 
     def __init__(
         self,
@@ -42,11 +40,14 @@ class CredentialVault:
         now_fn: Callable[[], datetime] | None = None,
         session_factory: Callable[[], requests.Session] | None = None,
     ) -> None:
-        self.database_server_url = database_server_url
-        self.ssl_verify = ssl_verify
         self.debug_log = debug_log
         self.now_fn = now_fn or datetime.now
-        self.session_factory = session_factory or requests.Session
+
+        self.client = UpstreamClient(
+            base_url=database_server_url,
+            ssl_verify=ssl_verify,
+            session_factory=session_factory or requests.Session,
+        )
 
         self.credentials: dict[str, Any] = {}
         self.totp_info: dict[str, Any] = {}
@@ -54,9 +55,7 @@ class CredentialVault:
         self.session_cookies: dict[str, Any] = {}
         self.active_session: bool | None = None
         self.last_login: datetime | None = None
-        self.auto_refresh_running = False
         self.auth_state: dict[str, Any] = {}
-        self.new_session()
 
     def debug(self, msg: str, *args: Any) -> None:
         if self.debug_log is not None:
@@ -68,25 +67,8 @@ class CredentialVault:
     def current_time_iso(self) -> str:
         return self.current_time().isoformat()
 
-    def upstream_url(self, path: str) -> str:
-        return f"{self.database_server_url}{path}"
-
-    def http_request(self, method: str, url: str, *, timeout: int, **kwargs: Any) -> requests.Response:
-        return self.http_session.request(method, url, timeout=timeout, **kwargs)
-
-    @staticmethod
-    def response_json(response: requests.Response) -> JsonDict:
-        try:
-            payload = response.json()
-        except ValueError:
-            return {"error": "Upstream returned an invalid JSON response"}
-        if isinstance(payload, dict):
-            return payload
-        return {"error": "Upstream returned an unexpected response payload"}
-
     def new_session(self) -> None:
-        self.http_session = self.session_factory()
-        self.http_session.verify = self.ssl_verify
+        self.client.new_session()
 
     def reset_auth(self, clear_credentials: bool = False) -> None:
         if clear_credentials:
@@ -124,17 +106,8 @@ class CredentialVault:
         self.session_cookies = dict(cookies)
         self.last_login = self.current_time()
 
-    def get_session(self) -> requests.Session:
-        return self.http_session
-
     def login_request(self, payload: JsonDict) -> tuple[requests.Response, JsonDict]:
-        response = self.http_request(
-            "POST",
-            self.upstream_url(UPSTREAM_LOGIN_PATH),
-            json=payload,
-            timeout=LOGIN_REQUEST_TIMEOUT_SECONDS,
-        )
-        return response, self.response_json(response)
+        return self.client.post_json(UPSTREAM_LOGIN_PATH, payload, timeout=LOGIN_REQUEST_TIMEOUT_SECONDS)
 
     def error_result(self, message: str, *, state: JsonDict | None = None) -> JsonDict:
         result: JsonDict = {"success": False, "error": message}
@@ -143,7 +116,7 @@ class CredentialVault:
         return result
 
     def mark_authenticated(self, data: JsonDict) -> JsonDict:
-        self.store_cookies(self.http_session.cookies)
+        self.store_cookies(self.client.session.cookies)
         self.active_session = True
         self.auth_state = {"authenticated": True, "user": data.get("user")}
         return {"success": True, "data": data}
@@ -170,26 +143,8 @@ class CredentialVault:
             "state": data,
         }
 
-    def current_auth_step(self) -> str:
-        return str(self.auth_state.get("current_step", PASSWORD_STEP))
-
     def reset_to_password_step(self) -> None:
         self.auth_state = {"current_step": PASSWORD_STEP}
-
-    def login_error_message(self, data: JsonDict, fallback: str) -> str:
-        return str(data.get("error", fallback))
-
-    @staticmethod
-    def upstream_next_step(data: JsonDict) -> str | None:
-        next_step = data.get("next_step")
-        if isinstance(next_step, str):
-            return next_step
-        return None
-
-    @staticmethod
-    def has_invalid_session_state_error(data: JsonDict) -> bool:
-        error = data.get("error")
-        return isinstance(error, str) and INVALID_SESSION_STATE_FRAGMENT in error
 
     def finalize_login_step_result(
         self,
@@ -201,22 +156,26 @@ class CredentialVault:
         include_state_on_incomplete: bool = False,
         reset_password_on_invalid_session: bool = False,
     ) -> JsonDict:
-        if response.status_code != 200:
-            if reset_password_on_invalid_session and self.has_invalid_session_state_error(data):
-                self.reset_to_password_step()
-            return self.error_result(self.login_error_message(data, failure_message))
+        outcome = interpret_login_reply(
+            LoginReply(status_code=response.status_code, data=data),
+            failure_message=failure_message,
+            incomplete_message=incomplete_message,
+            include_state_on_incomplete=include_state_on_incomplete,
+            reset_password_on_invalid_session=reset_password_on_invalid_session,
+        )
 
-        next_step = self.upstream_next_step(data)
-        if next_step == "totp":
-            return self.require_totp(data)
-        if next_step == "security":
-            return self.require_security(data.get("security_question"), data)
-        if data.get("authenticated"):
-            return self.mark_authenticated(data)
+        if outcome.reset_to_password:
+            self.reset_to_password_step()
 
-        if include_state_on_incomplete:
-            return self.error_result(incomplete_message, state=data)
-        return self.error_result(incomplete_message)
+        if outcome.kind == "error":
+            return self.error_result(str(outcome.error or failure_message))
+        if outcome.kind == "require_totp":
+            return self.require_totp(outcome.state or {})
+        if outcome.kind == "require_security":
+            return self.require_security(outcome.security_question, outcome.state or {})
+        if outcome.kind == "authenticated":
+            return self.mark_authenticated(outcome.authenticated_data or {})
+        return self.error_result(str(outcome.error or incomplete_message), state=outcome.state)
 
     def handle_totp_step(self, totp_code: str) -> JsonDict:
         self.debug("Sending TOTP code to server...")
@@ -260,14 +219,9 @@ class CredentialVault:
         )
 
     def determine_login_attempt(self, *, totp_code: str | None, security_answer: str | None) -> LoginAttempt:
-        current_step = self.current_auth_step()
-        self.debug("current_step = %s", current_step)
-
-        if totp_code and current_step != WAITING_SECURITY_STEP:
-            return LoginAttempt(handler="totp", value=totp_code)
-        if security_answer and current_step == WAITING_SECURITY_STEP:
-            return LoginAttempt(handler="security", value=security_answer)
-        return LoginAttempt(handler="password")
+        step = current_auth_step(self.auth_state)
+        self.debug("current_step = %s", step)
+        return determine_login_attempt(self.auth_state, totp_code=totp_code, security_answer=security_answer)
 
     def run_login_attempt(self, attempt: LoginAttempt) -> JsonDict:
         if attempt.handler == "password":
@@ -297,14 +251,9 @@ class CredentialVault:
         return self.multi_step_login(totp_code, security_answer)
 
     def upstream_session_authenticated(self) -> bool:
-        response = self.http_request(
-            "GET",
-            self.upstream_url(UPSTREAM_SESSION_PATH),
-            timeout=SESSION_CHECK_TIMEOUT_SECONDS,
-        )
+        response, data = self.client.get_json(UPSTREAM_SESSION_PATH, timeout=SESSION_CHECK_TIMEOUT_SECONDS)
         if response.status_code != 200:
             return False
-        data = self.response_json(response)
         return bool(data.get("authenticated"))
 
     def reauthenticate(self) -> bool:
@@ -324,12 +273,7 @@ class CredentialVault:
         return self.reauthenticate()
 
     def request_upstream(self, method: str, path: str, **kwargs: Any) -> requests.Response:
-        return self.http_request(
-            method,
-            self.upstream_url(path),
-            timeout=PROXY_REQUEST_TIMEOUT_SECONDS,
-            **kwargs,
-        )
+        return self.client.request(method, path, timeout=PROXY_REQUEST_TIMEOUT_SECONDS, **kwargs)
 
     def proxy_request(self, method: str, path: str, **kwargs: Any) -> Any | None:
         if not self.ensure_session():
@@ -362,3 +306,4 @@ class CredentialVault:
             "has_session": bool(self.session_cookies),
             "active": bool(self.active_session),
         }
+

@@ -1,19 +1,30 @@
+"""Authentication and MFA helpers (password hashing, TOTP)."""
+
+from __future__ import annotations
+
 import base64
 import hashlib
 import hmac
 import secrets
 import struct
 import time
+from collections.abc import Callable
+from typing import Any
 
 from argon2 import PasswordHasher
 from argon2 import exceptions as argon2_exceptions
 from werkzeug.security import check_password_hash
 
-# ==================== TOTP (Time-based One-Time Password) Implementation ====================
+DEFAULT_TOTP_TIME_STEP_SECONDS = 30
+TOTP_TOKEN_LENGTH = 6
+
+
+def normalize_totp_secret(secret: str) -> str:
+    return secret.upper()
 
 
 def decode_totp_secret(secret: str) -> bytes:
-    normalized = secret.upper()
+    normalized = normalize_totp_secret(secret)
     padding = "=" * ((8 - len(normalized) % 8) % 8)
     return base64.b32decode(normalized + padding)
 
@@ -25,39 +36,74 @@ def totp_code_for_counter(secret: str, counter: int) -> str:
     offset = hmac_hash[-1] & 0x0F
     code = struct.unpack(">I", hmac_hash[offset : offset + 4])[0]
     code = (code & 0x7FFFFFFF) % 1000000
-    return str(code).zfill(6)
+    return str(code).zfill(TOTP_TOKEN_LENGTH)
 
 
 def generate_totp_secret() -> str:
-    """Generate a random TOTP secret"""
     return base64.b32encode(secrets.token_bytes(20)).decode("utf-8")
 
 
-def get_totp_token(secret: str, time_step: int = 30) -> str:
-    """Generate current TOTP token"""
-    counter = int(time.time() // time_step)
-    return totp_code_for_counter(secret, counter)
+def totp_counter(*, now: float, time_step: int) -> int:
+    return int(now // time_step)
 
 
-def verify_totp(secret: str, token: str, window: int = 1) -> bool:
-    """Verify TOTP token with time window tolerance"""
-    for i in range(-window, window + 1):
-        counter = int(time.time() // 30) + i
-        expected = totp_code_for_counter(secret, counter)
+def get_totp_token(secret: str, *, now: float | None = None, time_step: int = DEFAULT_TOTP_TIME_STEP_SECONDS) -> str:
+    now_value = time.time() if now is None else now
+    return totp_code_for_counter(secret, totp_counter(now=now_value, time_step=time_step))
+
+
+def verify_totp(
+    secret: str,
+    token: str,
+    *,
+    now: float | None = None,
+    time_step: int = DEFAULT_TOTP_TIME_STEP_SECONDS,
+    window: int = 1,
+) -> bool:
+    now_value = time.time() if now is None else now
+    base_counter = totp_counter(now=now_value, time_step=time_step)
+    for offset in range(-window, window + 1):
+        expected = totp_code_for_counter(secret, base_counter + offset)
         if hmac.compare_digest(token, expected):
             return True
     return False
 
 
-def get_totp_uri(secret: str, username: str, issuer: str = "DataVault") -> str:
-    """Generate otpauth URI for QR code"""
+def totp_uri(secret: str, username: str, *, issuer: str = "DataVault") -> str:
     return f"otpauth://totp/{issuer}:{username}?secret={secret}&issuer={issuer}"
 
 
-# ==================== Password hashing / upgrade helpers ====================
+class TotpService:
+    """Encapsulates TOTP operations with an injectable clock."""
 
+    def __init__(
+        self,
+        *,
+        time_step: int = DEFAULT_TOTP_TIME_STEP_SECONDS,
+        now_fn: Callable[[], float] | None = None,
+    ) -> None:
+        self._time_step = time_step
+        self._now_fn = now_fn or time.time
 
-_password_hasher = PasswordHasher()
+    @staticmethod
+    def generate_secret() -> str:
+        return generate_totp_secret()
+
+    def get_token(self, secret: str) -> str:
+        return get_totp_token(secret, now=self._now_fn(), time_step=self._time_step)
+
+    def verify(self, secret: str, token: str, window: int = 1) -> bool:
+        return verify_totp(
+            secret,
+            token,
+            now=self._now_fn(),
+            time_step=self._time_step,
+            window=window,
+        )
+
+    @staticmethod
+    def uri(secret: str, username: str, *, issuer: str = "DataVault") -> str:
+        return totp_uri(secret, username, issuer=issuer)
 
 
 def is_hash(value: str) -> bool:
@@ -70,67 +116,41 @@ def is_argon2(value: str) -> bool:
     return bool(value) and value.startswith("$argon2")
 
 
-def hash_value(value: str) -> str:
-    return _password_hasher.hash(value)
-
-
-def verify_value(stored: str, provided: str) -> tuple[bool, bool]:
-    if stored is None or provided is None:
-        return False, False
-
-    if is_argon2(stored):
-        try:
-            ok = _password_hasher.verify(stored, provided)
-            return ok, _password_hasher.check_needs_rehash(stored) if ok else False
-        except argon2_exceptions.VerifyMismatchError:
-            return False, False
-        except Exception:
-            return False, False
-
-    if is_hash(stored):
-        ok = check_password_hash(stored, provided)
-        return ok, ok
-
-    compare_ok = bool(hmac.compare_digest(stored, provided))
-    return compare_ok, compare_ok
-
-
 class PasswordService:
     """Encapsulates password hashing and upgrade rules."""
 
-    @staticmethod
-    def is_hash(value: str) -> bool:
-        return is_hash(value)
+    def __init__(self, hasher: PasswordHasher | None = None) -> None:
+        self._hasher = hasher or PasswordHasher()
 
-    @staticmethod
-    def hash_value(value: str) -> str:
-        return hash_value(value)
+    def hash_value(self, value: str) -> str:
+        return self._hasher.hash(value)
 
-    @staticmethod
-    def verify_value(stored: str, provided: str) -> tuple[bool, bool]:
-        return verify_value(stored, provided)
+    def verify_value(self, stored: str | None, provided: str | None) -> tuple[bool, bool]:
+        if not stored or provided is None:
+            return False, False
 
-    def verify_and_upgrade(self, session, user, field: str, provided: str) -> bool:
+        if is_argon2(stored):
+            try:
+                ok = self._hasher.verify(stored, provided)
+                return ok, self._hasher.check_needs_rehash(stored) if ok else False
+            except argon2_exceptions.VerifyMismatchError:
+                return False, False
+            except Exception:
+                return False, False
+
+        if is_hash(stored):
+            ok = check_password_hash(stored, provided)
+            return ok, ok  # upgrade to argon2 when verified
+
+        ok = bool(hmac.compare_digest(stored, provided))
+        return ok, ok  # upgrade to argon2 when verified
+
+    def verify_and_upgrade(self, session: Any, user: Any, field: str, provided: str) -> bool:
         stored = getattr(user, field)
-        ok, needs_upgrade = verify_value(stored, provided)
+        ok, needs_upgrade = self.verify_value(stored, provided)
         if ok and needs_upgrade:
-            setattr(user, field, hash_value(provided))
+            setattr(user, field, self.hash_value(provided))
             session.add(user)
             session.commit()
         return ok
 
-
-class TotpService:
-    """Encapsulates TOTP operations."""
-
-    @staticmethod
-    def generate_secret() -> str:
-        return generate_totp_secret()
-
-    @staticmethod
-    def get_token(secret: str, time_step: int = 30) -> str:
-        return get_totp_token(secret, time_step=time_step)
-
-    @staticmethod
-    def verify(secret: str, token: str, window: int = 1) -> bool:
-        return verify_totp(secret, token, window=window)

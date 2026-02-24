@@ -1,26 +1,23 @@
 #!/usr/bin/env python3
 """Verify tamper-evident audit log chain."""
 
-import hashlib
-import importlib
+from __future__ import annotations
+
 import os
+import sys
+from pathlib import Path
 
-from sqlalchemy import select
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from sqlalchemy.orm import Session
+
+from database_server.db import DatabaseSessionManager, load_db_config
+from database_server.services import AuditService
 
 
-_db_module = importlib.import_module(f"{__package__}.db" if __package__ else "db")
-DatabaseSessionManager = _db_module.DatabaseSessionManager
-load_db_config = _db_module.load_db_config
-_models_module = importlib.import_module(f"{__package__}.models" if __package__ else "models")
-AuditLog = _models_module.AuditLog
-
-
-def build_audit_payload(prev_hash: str, row: AuditLog) -> str:
-    timestamp = row.timestamp.isoformat() if row.timestamp is not None else ""
-    return (
-        f"{prev_hash}|{timestamp}|{row.user_id}|{row.action}|"
-        f"{row.table_name or ''}|{row.query or ''}"
-    )
+def verify_chain(session: Session) -> tuple[bool, dict[str, object] | None]:
+    return AuditService(session).verify_chain()
 
 
 def main() -> None:
@@ -31,18 +28,14 @@ def main() -> None:
 
     manager = DatabaseSessionManager.from_env()
     with manager.session() as session:
-        rows = session.execute(select(AuditLog).order_by(AuditLog.id)).scalars().all()
-        prev_hash = ""
-        for row in rows:
-            payload = build_audit_payload(prev_hash, row)
-            expected = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-            if row.entry_hash != expected:
-                print("Audit chain verification FAILED at id", row.id)
-                print(" expected:", expected)
-                print(" actual:  ", row.entry_hash)
-                return
-            prev_hash = row.entry_hash or ""
-        print("Audit chain verification OK. Entries:", len(rows))
+        ok, info = verify_chain(session)
+        if not ok:
+            info = info or {}
+            print("Audit chain verification FAILED at id", info.get("id"))
+            print(" expected:", info.get("expected"))
+            print(" actual:  ", info.get("actual"))
+            return
+        print("Audit chain verification OK.")
 
 
 if __name__ == "__main__":

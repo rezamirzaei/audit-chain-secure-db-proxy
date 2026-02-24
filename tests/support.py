@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,3 +24,14 @@ def import_fresh_app(package_name: str) -> Any:
         if module_name == package_name or module_name.startswith(f"{package_name}."):
             del sys.modules[module_name]
     return importlib.import_module(f"{package_name}.app")
+
+
+@dataclass(frozen=True)
+class FreshApp:
+    module: Any
+    app: Any
+
+
+def create_fresh_app(package_name: str) -> FreshApp:
+    module = import_fresh_app(package_name)
+    return FreshApp(module=module, app=module.create_app())

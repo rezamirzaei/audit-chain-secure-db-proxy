@@ -1,6 +1,6 @@
 import pytest
 
-from tests.support import import_fresh_app
+from tests.support import create_fresh_app
 
 
 @pytest.fixture()
@@ -9,10 +9,10 @@ def proxy_module_demo(monkeypatch):
     monkeypatch.setenv("PROXY_FEATURES_ENABLED", "true")
     monkeypatch.delenv("REDIS_URL", raising=False)
 
-    module = import_fresh_app("proxy_clone")
-    module.app.testing = True
-    yield module
-    module._VAULTS.clear()
+    fresh = create_fresh_app("proxy_clone")
+    fresh.app.testing = True
+    yield fresh
+    fresh.app.extensions["vault_registry"].vaults.clear()
 
 
 @pytest.fixture()
@@ -27,11 +27,11 @@ def proxy_client_features_disabled(monkeypatch):
     monkeypatch.setenv("PROXY_FEATURES_ENABLED", "false")
     monkeypatch.delenv("REDIS_URL", raising=False)
 
-    module = import_fresh_app("proxy_clone")
-    module.app.testing = True
-    with module.app.test_client() as client:
+    fresh = create_fresh_app("proxy_clone")
+    fresh.app.testing = True
+    with fresh.app.test_client() as client:
         yield client
-    module._VAULTS.clear()
+    fresh.app.extensions["vault_registry"].vaults.clear()
 
 
 def test_proxy_status_disabled_when_feature_off(proxy_client_features_disabled):
@@ -67,7 +67,7 @@ def test_proxy_api_rejects_invalid_json_payloads(proxy_client):
 
 
 def test_proxy_table_endpoint_validates_table_name(proxy_client, proxy_module_demo, monkeypatch):
-    monkeypatch.setattr(proxy_module_demo.CredentialVault, "ensure_session", lambda self: True)
+    monkeypatch.setattr(proxy_module_demo.module.CredentialVault, "ensure_session", lambda self: True)
 
     resp = proxy_client.get("/api/table/not-valid-name")
     assert resp.status_code == 400
@@ -79,7 +79,7 @@ def test_proxy_status_shape_is_sanitized_after_connect(proxy_client, proxy_modul
         self.auth_state = {"current_step": "waiting_totp"}
         return {"success": False, "requires_totp": True}
 
-    monkeypatch.setattr(proxy_module_demo.CredentialVault, "login", fake_login)
+    monkeypatch.setattr(proxy_module_demo.module.CredentialVault, "login", fake_login)
     connect_resp = proxy_client.post("/api/connect", json={"step": "password", "username": "alice", "password": "pw"})
     assert connect_resp.status_code == 200
 
@@ -118,7 +118,7 @@ def test_proxy_api_connect_multistep_and_session_isolation(proxy_module_demo, mo
             "message": "Please enter your 2FA code",
         }
 
-    monkeypatch.setattr(proxy_module_demo.CredentialVault, "login", fake_login)
+    monkeypatch.setattr(proxy_module_demo.module.CredentialVault, "login", fake_login)
 
     client_a = proxy_module_demo.app.test_client()
     client_b = proxy_module_demo.app.test_client()
@@ -141,8 +141,9 @@ def test_proxy_api_connect_multistep_and_session_isolation(proxy_module_demo, mo
         vault_b_id = sess_b["vault_id"]
 
     assert vault_a_id != vault_b_id
-    assert proxy_module_demo._VAULTS[vault_a_id].credentials["username"] == "alice"
-    assert proxy_module_demo._VAULTS[vault_b_id].credentials["username"] == "bob"
+    vaults = proxy_module_demo.app.extensions["vault_registry"].vaults
+    assert vaults[vault_a_id].credentials["username"] == "alice"
+    assert vaults[vault_b_id].credentials["username"] == "bob"
 
     resp_totp = client_a.post("/api/connect", json={"step": "totp", "totp_code": "123456"})
     assert resp_totp.status_code == 200

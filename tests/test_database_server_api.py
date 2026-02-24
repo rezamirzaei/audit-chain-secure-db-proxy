@@ -1,6 +1,6 @@
 import pytest
 
-from tests.support import import_fresh_app
+from tests.support import create_fresh_app
 
 
 @pytest.fixture()
@@ -16,10 +16,9 @@ def db_client(tmp_path, monkeypatch):
     monkeypatch.delenv("POSTGRES_DSN", raising=False)
     monkeypatch.delenv("REDIS_URL", raising=False)
 
-    module = import_fresh_app("database_server")
-
-    module.app.testing = True
-    with module.app.test_client() as client:
+    fresh = create_fresh_app("database_server")
+    fresh.app.testing = True
+    with fresh.app.test_client() as client:
         yield client
 
 

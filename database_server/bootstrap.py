@@ -4,13 +4,11 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
 
-import redis as redis_lib
-from cachelib.file import FileSystemCache
 from flask import Flask
-from flask_session import Session
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .config import AppConfig
+from shared.session_config import configure_sessions
 
 
 class AppBootstrap:
@@ -39,13 +37,10 @@ class AppBootstrap:
             app.wsgi_app = ProxyFix(cast(Any, app.wsgi_app), x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 
     def configure_sessions(self, app: Flask) -> None:
-        if self._config.redis_url:
-            app.config["SESSION_TYPE"] = "redis"
-            app.config["SESSION_REDIS"] = redis_lib.from_url(self._config.redis_url)
-            app.config["SESSION_KEY_PREFIX"] = self._config.session_key_prefix
-        else:
-            session_dir = Path(__file__).resolve().parent / "data" / "sessions"
-            session_dir.mkdir(parents=True, exist_ok=True)
-            app.config["SESSION_TYPE"] = "cachelib"
-            app.config["SESSION_CACHELIB"] = FileSystemCache(cache_dir=str(session_dir))
-        Session(app)
+        session_dir = Path(__file__).resolve().parent / "data" / "sessions"
+        configure_sessions(
+            app,
+            redis_url=self._config.redis_url,
+            session_key_prefix=self._config.session_key_prefix,
+            session_dir=session_dir,
+        )

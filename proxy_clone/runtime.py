@@ -1,22 +1,25 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 import urllib3
 from urllib3.exceptions import InsecureRequestWarning
 
-from .bootstrap import ProxyCloneBootstrap
 from .config import ProxyCloneConfig
 
 
+@dataclass(frozen=True)
 class ProxyCloneRuntime:
-    def __init__(self, config: ProxyCloneConfig | None = None) -> None:
-        self.config = config or ProxyCloneConfig.from_env()
-        if not self.config.ssl_verify:
-            urllib3.disable_warnings(InsecureRequestWarning)
+    config: ProxyCloneConfig
+    logger: logging.Logger
 
-        self.bootstrap = ProxyCloneBootstrap(self.config)
-        self.app = self.bootstrap.create_app()
 
-        logging.basicConfig(level=self.config.log_level)
-        self.logger = logging.getLogger("proxy_clone")
+def create_runtime(config: ProxyCloneConfig | None = None) -> ProxyCloneRuntime:
+    config = config or ProxyCloneConfig.from_env()
+    if not config.ssl_verify:
+        urllib3.disable_warnings(InsecureRequestWarning)
+
+    logging.basicConfig(level=config.log_level)
+    logger = logging.getLogger("proxy_clone")
+    return ProxyCloneRuntime(config=config, logger=logger)

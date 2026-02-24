@@ -6,11 +6,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-
-def parse_bool(value: str | None, default: bool) -> bool:
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+from shared.env_utils import parse_bool
 
 
 def ssl_cert_available() -> bool:
