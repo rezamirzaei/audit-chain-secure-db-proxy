@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -25,6 +26,30 @@ UPSTREAM_LOGIN_PATH = "/api/login"
 UPSTREAM_SESSION_PATH = "/api/session"
 
 
+@dataclass(frozen=True)
+class CredentialVaultConfig:
+    """Configuration knobs for upstream interaction and timeouts."""
+
+    login_timeout_seconds: int = LOGIN_REQUEST_TIMEOUT_SECONDS
+    session_check_timeout_seconds: int = SESSION_CHECK_TIMEOUT_SECONDS
+    proxy_request_timeout_seconds: int = PROXY_REQUEST_TIMEOUT_SECONDS
+    upstream_login_path: str = UPSTREAM_LOGIN_PATH
+    upstream_session_path: str = UPSTREAM_SESSION_PATH
+
+
+@dataclass
+class CredentialVaultState:
+    """Mutable state for a single user's captured credentials and auth progress."""
+
+    credentials: JsonDict = field(default_factory=dict)
+    totp_info: JsonDict = field(default_factory=dict)
+    security_info: JsonDict = field(default_factory=dict)
+    session_cookies: JsonDict = field(default_factory=dict)
+    auth_state: JsonDict = field(default_factory=dict)
+    active_session: bool | None = None
+    last_login: datetime | None = None
+
+
 class CredentialVault:
     """Stores captured credentials + upstream cookies and performs multi-step auth."""
 
@@ -39,9 +64,11 @@ class CredentialVault:
         debug_log: Callable[..., None] | None = None,
         now_fn: Callable[[], datetime] | None = None,
         session_factory: Callable[[], requests.Session] | None = None,
+        config: CredentialVaultConfig | None = None,
     ) -> None:
         self.debug_log = debug_log
         self.now_fn = now_fn or datetime.now
+        self.config = config or CredentialVaultConfig()
 
         self.client = UpstreamClient(
             base_url=database_server_url,
@@ -49,13 +76,63 @@ class CredentialVault:
             session_factory=session_factory or requests.Session,
         )
 
-        self.credentials: dict[str, Any] = {}
-        self.totp_info: dict[str, Any] = {}
-        self.security_info: dict[str, Any] = {}
-        self.session_cookies: dict[str, Any] = {}
-        self.active_session: bool | None = None
-        self.last_login: datetime | None = None
-        self.auth_state: dict[str, Any] = {}
+        self._state = CredentialVaultState()
+
+    @property
+    def credentials(self) -> JsonDict:
+        return self._state.credentials
+
+    @credentials.setter
+    def credentials(self, value: JsonDict) -> None:
+        self._state.credentials = value
+
+    @property
+    def totp_info(self) -> JsonDict:
+        return self._state.totp_info
+
+    @totp_info.setter
+    def totp_info(self, value: JsonDict) -> None:
+        self._state.totp_info = value
+
+    @property
+    def security_info(self) -> JsonDict:
+        return self._state.security_info
+
+    @security_info.setter
+    def security_info(self, value: JsonDict) -> None:
+        self._state.security_info = value
+
+    @property
+    def session_cookies(self) -> JsonDict:
+        return self._state.session_cookies
+
+    @session_cookies.setter
+    def session_cookies(self, value: JsonDict) -> None:
+        self._state.session_cookies = value
+
+    @property
+    def active_session(self) -> bool | None:
+        return self._state.active_session
+
+    @active_session.setter
+    def active_session(self, value: bool | None) -> None:
+        self._state.active_session = value
+
+    @property
+    def last_login(self) -> datetime | None:
+        return self._state.last_login
+
+    @last_login.setter
+    def last_login(self, value: datetime | None) -> None:
+        self._state.last_login = value
+
+    @property
+    def auth_state(self) -> JsonDict:
+        return self._state.auth_state
+
+    @auth_state.setter
+    def auth_state(self, value: JsonDict) -> None:
+        self._state.auth_state = value
 
     def debug(self, msg: str, *args: Any) -> None:
         if self.debug_log is not None:
@@ -103,11 +180,14 @@ class CredentialVault:
         }
 
     def store_cookies(self, cookies: Any) -> None:
-        self.session_cookies = dict(cookies)
+        try:
+            self.session_cookies = requests.utils.dict_from_cookiejar(cookies)
+        except Exception:  # pragma: no cover - defensive conversion fallback
+            self.session_cookies = dict(cookies)
         self.last_login = self.current_time()
 
     def login_request(self, payload: JsonDict) -> tuple[requests.Response, JsonDict]:
-        return self.client.post_json(UPSTREAM_LOGIN_PATH, payload, timeout=LOGIN_REQUEST_TIMEOUT_SECONDS)
+        return self.client.post_json(self.config.upstream_login_path, payload, timeout=self.config.login_timeout_seconds)
 
     def error_result(self, message: str, *, state: JsonDict | None = None) -> JsonDict:
         result: JsonDict = {"success": False, "error": message}
@@ -251,7 +331,10 @@ class CredentialVault:
         return self.multi_step_login(totp_code, security_answer)
 
     def upstream_session_authenticated(self) -> bool:
-        response, data = self.client.get_json(UPSTREAM_SESSION_PATH, timeout=SESSION_CHECK_TIMEOUT_SECONDS)
+        response, data = self.client.get_json(
+            self.config.upstream_session_path,
+            timeout=self.config.session_check_timeout_seconds,
+        )
         if response.status_code != 200:
             return False
         return bool(data.get("authenticated"))
@@ -273,7 +356,7 @@ class CredentialVault:
         return self.reauthenticate()
 
     def request_upstream(self, method: str, path: str, **kwargs: Any) -> requests.Response:
-        return self.client.request(method, path, timeout=PROXY_REQUEST_TIMEOUT_SECONDS, **kwargs)
+        return self.client.request(method, path, timeout=self.config.proxy_request_timeout_seconds, **kwargs)
 
     def proxy_request(self, method: str, path: str, **kwargs: Any) -> Any | None:
         if not self.ensure_session():
@@ -306,4 +389,3 @@ class CredentialVault:
             "has_session": bool(self.session_cookies),
             "active": bool(self.active_session),
         }
-
