@@ -19,6 +19,7 @@ from flask import Flask, g, request, session
 from .api import (
     DatabaseApiBlueprintDependencies,
     DatabaseApiService,
+    LoginSessionState,
     RequestPayloadValidationError,
     RequestValidator,
     create_api_blueprint,
@@ -47,15 +48,6 @@ from .runtime import DatabaseServerRuntime, create_runtime
 from .domain import AuditService, QueryService, SchemaService, TableService, UserService
 from shared.ssl_utils import get_ssl_context
 from .web import DatabaseWebRoutes
-
-PENDING_SESSION_KEYS = (
-    "pending_totp_secret",
-    "pending_totp_enabled",
-    "pending_security_question",
-    "pending_security_answer",
-    "auth_step",
-)
-
 
 @dataclass(frozen=True)
 class DatabaseAppContext:
@@ -93,13 +85,9 @@ class DatabaseAppContext:
 
     def complete_login(self) -> None:
         session.permanent = True
-        session["user_id"] = session.pop("pending_user_id")
-        session["username"] = session.pop("pending_username")
-        session["role"] = session.pop("pending_role")
-        session["login_time"] = datetime.now().isoformat()
-
-        for key in PENDING_SESSION_KEYS:
-            session.pop(key, None)
+        LoginSessionState(session_store=cast(MutableMapping[str, Any], session)).finalize_login(
+            login_time=datetime.now().isoformat()
+        )
 
         self.log_action("login_complete")
 

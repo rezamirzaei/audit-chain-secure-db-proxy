@@ -67,10 +67,6 @@ class DatabaseAuthRoutes:
     def redirect_dashboard():
         return redirect(url_for("dashboard"))
 
-    @staticmethod
-    def pending_login_step_expected_for_security() -> str:
-        return "totp_verified" if session.get("pending_totp_enabled") else "password_verified"
-
     def render_login_page(self, *, error: str | None = None):
         return render_template("login.html", error=error)
 
@@ -146,7 +142,8 @@ class DatabaseAuthRoutes:
         return self.render_login_page(error=error)
 
     def verify_2fa(self):
-        if "pending_user_id" not in session or session.get("auth_step") != "password_verified":
+        login_state = LoginSessionState(session_store=cast(MutableMapping[str, Any], session))
+        if not login_state.has_expected_step("password_verified"):
             return self.redirect_login()
 
         error = None
@@ -170,8 +167,9 @@ class DatabaseAuthRoutes:
         return self.render_verify_2fa_page(error=error)
 
     def verify_security(self):
-        expected_step = self.pending_login_step_expected_for_security()
-        if "pending_user_id" not in session or session.get("auth_step") != expected_step:
+        login_state = LoginSessionState(session_store=cast(MutableMapping[str, Any], session))
+        expected_step = login_state.expected_security_step()
+        if not login_state.has_expected_step(expected_step):
             return self.redirect_login()
 
         error = None

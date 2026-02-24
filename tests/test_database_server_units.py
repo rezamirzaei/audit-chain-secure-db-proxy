@@ -44,6 +44,34 @@ def test_login_session_state_pending_user_id_parses_and_rejects_invalid_values()
     assert state.pending_user_id() is None
 
 
+def test_login_session_state_finalize_login_moves_pending_fields_and_clears_auth_step_keys():
+    store: dict[str, object] = {
+        "pending_user_id": 7,
+        "pending_username": "alice",
+        "pending_role": "admin",
+        "pending_totp_enabled": True,
+        "pending_security_question": "Favorite color?",
+        "auth_step": "totp_verified",
+        "other": "keep",
+    }
+    state = LoginSessionState(session_store=store)
+
+    state.finalize_login(login_time="2026-02-23T00:00:00")
+
+    assert store["user_id"] == 7
+    assert store["username"] == "alice"
+    assert store["role"] == "admin"
+    assert store["login_time"] == "2026-02-23T00:00:00"
+    assert store["other"] == "keep"
+
+    assert "pending_user_id" not in store
+    assert "pending_username" not in store
+    assert "pending_role" not in store
+    assert "pending_totp_enabled" not in store
+    assert "pending_security_question" not in store
+    assert "auth_step" not in store
+
+
 def test_login_api_request_validates_totp_format():
     with pytest.raises(ValidationError):
         LoginApiRequest(step="totp", totp_code="")

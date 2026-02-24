@@ -114,3 +114,20 @@ class LoginSessionState:
 
     def expected_security_step(self) -> str:
         return "totp_verified" if self.session_store.get("pending_totp_enabled") else "password_verified"
+
+    def finalize_login(self, *, login_time: str) -> None:
+        """Move pending login fields into the active session and clear auth-step state."""
+        self.session_store["user_id"] = self.session_store.pop("pending_user_id")
+        self.session_store["username"] = self.session_store.pop("pending_username")
+        self.session_store["role"] = self.session_store.pop("pending_role")
+        self.session_store["login_time"] = login_time
+
+        # Defensive cleanup for historical pending keys.
+        for key in (
+            "pending_totp_secret",
+            "pending_totp_enabled",
+            "pending_security_question",
+            "pending_security_answer",
+            "auth_step",
+        ):
+            self.session_store.pop(key, None)
