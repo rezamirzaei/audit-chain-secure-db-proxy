@@ -1,11 +1,8 @@
-"""Compatibility wrapper for `proxy_clone.api.validation`."""
+"""Compatibility wrapper around shared request validation helpers."""
 
-from __future__ import annotations
-
-from .api.validation import (
+from shared.request_validation import (
     RequestPayloadValidationError as RequestPayloadValidationError,
     RequestValidator as RequestValidator,
 )
 
 __all__ = ["RequestPayloadValidationError", "RequestValidator"]
-
