@@ -1,7 +1,5 @@
 from __future__ import annotations
-
-from flask import Flask, session
-
+from database_server.api_support import LoginSessionState
 from database_server.services import build_audit_payload, hash_audit_payload
 from database_server.web_routes import DatabaseWebRoutes
 
@@ -29,18 +27,17 @@ def test_hash_audit_payload_is_stable_and_sensitive_to_changes():
     assert len(same_hash) == 64
 
 
-def test_database_web_routes_pending_user_id_parses_and_rejects_invalid_values():
-    app = Flask(__name__)
-    app.secret_key = "test-secret"
+def test_login_session_state_pending_user_id_parses_and_rejects_invalid_values():
+    store: dict[str, object] = {}
+    state = LoginSessionState(session_store=store)
 
-    with app.test_request_context("/"):
-        assert DatabaseWebRoutes.pending_user_id() is None
+    assert state.pending_user_id() is None
 
-        session["pending_user_id"] = "42"
-        assert DatabaseWebRoutes.pending_user_id() == 42
+    store["pending_user_id"] = "42"
+    assert state.pending_user_id() == 42
 
-        session["pending_user_id"] = "not-an-int"
-        assert DatabaseWebRoutes.pending_user_id() is None
+    store["pending_user_id"] = "not-an-int"
+    assert state.pending_user_id() is None
 
 
 def test_database_web_routes_validates_totp_format():

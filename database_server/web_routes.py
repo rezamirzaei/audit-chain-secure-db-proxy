@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, MutableMapping
-from dataclasses import dataclass
 from typing import Any, cast
 
 from flask import Flask, redirect, render_template, request, session, url_for
@@ -16,13 +15,6 @@ from .models import AuditLog, AuthUser, Department, Employee, Project
 from .services import UserService
 
 LOGIN_BUCKET = "login"
-
-
-@dataclass(frozen=True)
-class PendingUserContext:
-    db_session: Any
-    user_service: UserService
-    user: Any
 
 
 class DatabaseWebRoutes:
@@ -67,16 +59,6 @@ class DatabaseWebRoutes:
             login_state=login_state,
         )
 
-    @staticmethod
-    def pending_user_id() -> int | None:
-        raw_user_id = session.get("pending_user_id")
-        if raw_user_id is None:
-            return None
-        try:
-            return int(raw_user_id)
-        except (TypeError, ValueError):
-            return None
-
     def register(self) -> None:
         self.app.add_url_rule("/", view_func=self.index)
         self.app.add_url_rule("/login", view_func=self.login, methods=["GET", "POST"])
@@ -119,16 +101,26 @@ class DatabaseWebRoutes:
     def get_user_service(self, db_session: Any) -> UserService:
         return UserService(db_session)
 
-    def pending_user_context(self) -> PendingUserContext | None:
-        db_session = self.get_db()
-        user_service = self.get_user_service(db_session)
-        pending_user_id = self.pending_user_id()
-        if pending_user_id is None:
+    def pending_security_question(self) -> str | None:
+        question = session.get("pending_security_question")
+        if isinstance(question, str) and question.strip():
+            return question
+        if "pending_security_question" in session:
             return None
-        user = user_service.get_by_id(pending_user_id)
+
+        raw_user_id = session.get("pending_user_id")
+        try:
+            user_id = int(raw_user_id)
+        except (TypeError, ValueError):
+            return None
+
+        db_session = self.get_db()
+        user = self.get_user_service(db_session).get_by_id(user_id)
         if user is None:
             return None
-        return PendingUserContext(db_session=db_session, user_service=user_service, user=user)
+
+        session["pending_security_question"] = user.security_question
+        return user.security_question
 
     def complete_login_and_redirect_dashboard(self):
         self.complete_login()
@@ -226,6 +218,8 @@ class DatabaseWebRoutes:
                 if status == 200 and next_step == "totp":
                     return redirect(url_for("verify_2fa"))
                 if status == 200 and next_step == "security":
+                    if "security_question" in body:
+                        session["pending_security_question"] = body.get("security_question")
                     return redirect(url_for("verify_security"))
                 error = str(body.get("error", "Invalid username or password"))
 
@@ -248,6 +242,8 @@ class DatabaseWebRoutes:
                 if status == 200 and body.get("authenticated"):
                     return self.redirect_dashboard()
                 if status == 200 and body.get("next_step") == "security":
+                    if "security_question" in body:
+                        session["pending_security_question"] = body.get("security_question")
                     return redirect(url_for("verify_security"))
                 error = str(body.get("error", "Invalid authentication code. Please try again."))
 
@@ -259,11 +255,7 @@ class DatabaseWebRoutes:
             return self.redirect_login()
 
         error = None
-        context = self.pending_user_context()
-        if context is None:
-            return self.redirect_login()
-
-        question = context.user.security_question
+        question = self.pending_security_question()
         if not question:
             return self.complete_login_and_redirect_dashboard()
 
