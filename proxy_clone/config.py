@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict
 
 from shared.env_utils import parse_bool
 
+from .ssl_utils import SSLConfig
+
 
 class ProxyCloneConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -39,7 +41,10 @@ class ProxyCloneConfig(BaseModel):
         database_server_url = os.environ.get("DATABASE_SERVER_URL", "https://localhost:5001")
         ssl_verify = parse_bool(os.environ.get("SSL_VERIFY"), not demo_mode)
         secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
-        session_cookie_secure = parse_bool(os.environ.get("SESSION_COOKIE_SECURE"), app_env == "production")
+        session_cookie_secure = parse_bool(
+            os.environ.get("SESSION_COOKIE_SECURE"),
+            app_env == "production" or SSLConfig.has_certificates(),
+        )
         session_cookie_samesite = os.environ.get("SESSION_COOKIE_SAMESITE", "Lax")
         log_level = os.environ.get("LOG_LEVEL", "INFO")
         redis_url = os.environ.get("REDIS_URL")

@@ -2,20 +2,12 @@ from __future__ import annotations
 
 import os
 import secrets
-from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from shared.env_utils import parse_bool
+from shared.env_utils import parse_bool, parse_int
 
-
-def ssl_cert_available() -> bool:
-    base_dir = Path(__file__).resolve().parent
-    cert_key_pairs = [
-        (Path("/app/certs/cert.pem"), Path("/app/certs/key.pem")),
-        (base_dir / "certs" / "cert.pem", base_dir / "certs" / "key.pem"),
-    ]
-    return any(cert.exists() and key.exists() for cert, key in cert_key_pairs)
+from .ssl_utils import SSLConfig
 
 
 class AppConfig(BaseModel):
@@ -61,15 +53,15 @@ class AppConfig(BaseModel):
         secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
         session_cookie_secure = parse_bool(
             os.environ.get("SESSION_COOKIE_SECURE"),
-            app_env == "production" or ssl_cert_available(),
+            app_env == "production" or SSLConfig.has_certificates(),
         )
         session_cookie_samesite = os.environ.get("SESSION_COOKIE_SAMESITE", "Lax")
         preferred_url_scheme = "https" if app_env == "production" else None
         log_level = os.environ.get("LOG_LEVEL", "INFO")
         redis_url = os.environ.get("REDIS_URL")
         session_key_prefix = os.environ.get("SESSION_KEY_PREFIX", "db_session:")
-        rate_limit_window_seconds = int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "600"))
-        rate_limit_max_attempts = int(os.environ.get("RATE_LIMIT_MAX_ATTEMPTS", "5"))
+        rate_limit_window_seconds = parse_int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS"), 600)
+        rate_limit_max_attempts = parse_int(os.environ.get("RATE_LIMIT_MAX_ATTEMPTS"), 5)
 
         return cls(
             app_env=app_env,

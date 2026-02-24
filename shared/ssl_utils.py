@@ -10,6 +10,10 @@ SslContextTuple = tuple[str | None, str | None]
 DEFAULT_SSL_SEARCH_PATHS: Final[tuple[tuple[str, str], ...]] = (
     ("/app/certs/cert.pem", "/app/certs/key.pem"),
     ("certs/cert.pem", "certs/key.pem"),
+    # Local dev helpers: demo cert generators place certs under service folders.
+    ("database_server/certs/cert.pem", "database_server/certs/key.pem"),
+    ("proxy_clone/certs/cert.pem", "proxy_clone/certs/key.pem"),
+    ("nginx/certs/cert.pem", "nginx/certs/key.pem"),
 )
 
 
@@ -34,4 +38,3 @@ class SSLConfig:
 def get_ssl_context() -> SslContextTuple:
     """Return `(cert_path, key_path)` when certificates are available."""
     return SSLConfig.find_certificates()
-
