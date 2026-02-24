@@ -4,12 +4,13 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any
 
 from flask import Blueprint, jsonify, request, session
 from sqlalchemy import select
 
 from ..models import AuthUser
+from shared.request_validation import RequestValidatorLike
 
 DecoratorFunc = Callable[[Any], Any]
 ApiServiceFactory = Callable[[], Any]
@@ -32,11 +33,6 @@ class DatabaseApiBlueprintDependencies:
     get_totp_token: Callable[[str], str]
     login_required: DecoratorFunc
     log_action: Callable[..., None]
-
-
-class RequestValidatorLike(Protocol):
-    def parse_json(self, request_obj: Any, model: Any) -> Any: ...
-    def parse_mapping(self, payload: dict[str, Any], model: Any, *, source: str) -> Any: ...
 
 
 class DatabaseApiController:

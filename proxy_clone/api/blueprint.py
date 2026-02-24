@@ -6,6 +6,8 @@ from typing import Any, Protocol
 
 from flask import Blueprint, Response, jsonify, request
 
+from shared.request_validation import RequestValidatorLike
+
 DecoratorFunc = Callable[[Any], Any]
 ApiServiceFactory = Callable[[], Any]
 
@@ -20,11 +22,6 @@ class ProxyApiBlueprintDependencies:
     feature_enabled: DecoratorFunc
     proxy_status_available: DecoratorFunc
     vault: Any
-
-
-class RequestValidatorLike(Protocol):
-    def parse_json(self, request_obj: Any, model: Any) -> Any: ...
-    def parse_mapping(self, payload: dict[str, Any], model: Any, *, source: str) -> Any: ...
 
 
 class VaultLike(Protocol):

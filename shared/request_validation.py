@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar
 
 from flask import Request
 from pydantic import BaseModel, ValidationError
 
 TModel = TypeVar("TModel", bound=BaseModel)
+
+
+class RequestValidatorLike(Protocol):
+    """Typing protocol for request validators used in blueprint/controller wiring."""
+
+    def parse_json(self, request_obj: Any, model: Any) -> Any: ...
+
+    def parse_mapping(self, payload: Mapping[str, Any], model: Any, *, source: str) -> Any: ...
 
 
 class RequestPayloadValidationError(Exception):
@@ -45,4 +53,3 @@ class RequestValidator:
                     elif isinstance(loc, list):
                         error["loc"] = [source, *loc]
             raise RequestPayloadValidationError(errors) from exc
-
