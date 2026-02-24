@@ -43,7 +43,7 @@ from shared.web_common import (
     login_required,
 )
 from .config import AppConfig
-from .db import init_db as init_database
+from .persistence import init_db as init_database
 from .runtime import DatabaseServerRuntime, create_runtime
 from .domain import AuditService, QueryService, SchemaService, TableService, UserService
 from shared.ssl_utils import get_ssl_context

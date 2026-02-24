@@ -11,7 +11,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from ..db import DatabaseSessionManager, init_db
+from ..persistence import DatabaseSessionManager, init_db
 from ..models import Department, Employee, Project
 
 
@@ -122,4 +122,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

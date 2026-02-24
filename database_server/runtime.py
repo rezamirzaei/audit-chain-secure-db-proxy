@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from .auth_utils import PasswordService, TotpService
 from .config import AppConfig
-from .db import DatabaseSessionManager
+from .persistence import DatabaseSessionManager
 
 
 class InMemoryRateLimiter:

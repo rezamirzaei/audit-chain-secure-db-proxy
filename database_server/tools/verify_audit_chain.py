@@ -10,7 +10,7 @@ import os
 
 from sqlalchemy.orm import Session
 
-from ..db import DatabaseSessionManager, load_db_config
+from ..persistence import DatabaseSessionManager, load_db_config
 from ..domain import AuditService
 
 
