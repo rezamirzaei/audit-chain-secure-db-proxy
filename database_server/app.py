@@ -49,6 +49,7 @@ from .domain import AuditService, QueryService, SchemaService, TableService, Use
 from shared.ssl_utils import get_ssl_context
 from .web import DatabaseWebRoutes
 
+
 @dataclass(frozen=True)
 class DatabaseAppContext:
     app: Flask
