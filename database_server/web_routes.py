@@ -116,12 +116,6 @@ class DatabaseWebRoutes:
             username=session.get("pending_username"),
         )
 
-    def is_login_bucket_rate_limited(self) -> bool:
-        return self.is_rate_limited(LOGIN_BUCKET)
-
-    def record_login_failure(self) -> None:
-        self.record_failed_attempt(LOGIN_BUCKET)
-
     def get_user_service(self, db_session: Any) -> UserService:
         return UserService(db_session)
 
