@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol
 
 from sqlalchemy import MetaData, Table, func, inspect, select, text
 from sqlalchemy.orm import Session
@@ -24,6 +25,36 @@ def build_audit_payload(
 
 def hash_audit_payload(payload: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+class AuditRowLike(Protocol):
+    id: int
+    timestamp: Any
+    user_id: int | None
+    action: str | None
+    table_name: str | None
+    query: str | None
+    entry_hash: str | None
+
+
+def verify_audit_chain(rows: Sequence[AuditRowLike]) -> tuple[bool, dict[str, Any] | None]:
+    """Verify the audit chain hashes match row payloads in order."""
+    prev_hash = ""
+    for row in rows:
+        timestamp = row.timestamp.isoformat() if isinstance(row.timestamp, datetime) else str(row.timestamp)
+        payload = build_audit_payload(
+            prev_hash,
+            timestamp=timestamp,
+            user_id=row.user_id,
+            action=row.action,
+            table_name=row.table_name,
+            query=row.query,
+        )
+        expected = hash_audit_payload(payload)
+        if row.entry_hash != expected:
+            return False, {"id": row.id, "expected": expected, "actual": row.entry_hash}
+        prev_hash = row.entry_hash or ""
+    return True, None
 
 
 class UserService:
@@ -69,22 +100,7 @@ class AuditService:
 
     def verify_chain(self) -> tuple[bool, dict[str, Any] | None]:
         rows = self.session.execute(select(AuditLog).order_by(AuditLog.id)).scalars().all()
-        prev_hash = ""
-        for row in rows:
-            timestamp = row.timestamp.isoformat() if isinstance(row.timestamp, datetime) else str(row.timestamp)
-            payload = build_audit_payload(
-                prev_hash,
-                timestamp=timestamp,
-                user_id=row.user_id,
-                action=row.action,
-                table_name=row.table_name,
-                query=row.query,
-            )
-            expected = hash_audit_payload(payload)
-            if row.entry_hash != expected:
-                return False, {"id": row.id, "expected": expected, "actual": row.entry_hash}
-            prev_hash = row.entry_hash or ""
-        return True, None
+        return verify_audit_chain(rows)
 
 
 class SchemaService:
