@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -11,19 +12,32 @@ from ..models import AuditLog, AuthUser, Base, Department, Employee, Project
 from .session_manager import DatabaseSessionManager
 
 
-def init_db(manager: DatabaseSessionManager, demo_mode: bool, enable_totp_test_endpoint: bool, log_info) -> None:
+def init_db(
+    manager: DatabaseSessionManager,
+    demo_mode: bool,
+    enable_totp_test_endpoint: bool,
+    log_info: Any,
+) -> None:
     Base.metadata.create_all(manager.engine)
     seeder = DatabaseSeeder(manager, demo_mode=demo_mode, enable_totp_test_endpoint=enable_totp_test_endpoint)
     seeder.seed(log_info=log_info)
 
 
 class DatabaseSeeder:
-    def __init__(self, manager: DatabaseSessionManager, demo_mode: bool, enable_totp_test_endpoint: bool):
+    def __init__(
+        self,
+        manager: DatabaseSessionManager,
+        demo_mode: bool,
+        enable_totp_test_endpoint: bool,
+        *,
+        password_service: PasswordService | None = None,
+        totp_service: TotpService | None = None,
+    ):
         self.manager = manager
         self.demo_mode = demo_mode
         self.enable_totp_test_endpoint = enable_totp_test_endpoint
-        self.password_service = PasswordService()
-        self.totp_service = TotpService()
+        self.password_service = password_service or PasswordService()
+        self.totp_service = totp_service or TotpService()
 
     def seed(self, log_info) -> None:
         with self.manager.session() as session:

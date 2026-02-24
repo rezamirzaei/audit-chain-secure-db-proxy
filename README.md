@@ -109,10 +109,10 @@ You can seed additional demo data (idempotent):
 
 ```bash
 # Docker
-docker exec database-server python /app/seed_data.py
+docker exec database-server python -m database_server.tools.seed_data
 
 # Local
-python database_server/seed_data.py
+python -m database_server.tools.seed_data
 ```
 
 ## Audit Integrity Verification
@@ -121,10 +121,19 @@ Verify the tamper‑evident audit chain:
 
 ```bash
 # Docker
-docker exec database-server python /app/verify_audit_chain.py
+docker exec database-server python -m database_server.tools.verify_audit_chain
 
 # Local
-python database_server/verify_audit_chain.py
+python -m database_server.tools.verify_audit_chain
+```
+
+## Cleaning Local Caches
+
+This repo ignores local caches like `__pycache__/`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`.
+If you want to remove them from your working tree:
+
+```bash
+bash scripts/clean.sh
 ```
 
 ## How to Use

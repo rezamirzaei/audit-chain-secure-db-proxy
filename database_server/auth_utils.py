@@ -122,6 +122,10 @@ class PasswordService:
     def __init__(self, hasher: PasswordHasher | None = None) -> None:
         self._hasher = hasher or PasswordHasher()
 
+    @staticmethod
+    def is_hash(value: str) -> bool:
+        return is_hash(value)
+
     def hash_value(self, value: str) -> str:
         return self._hasher.hash(value)
 
@@ -153,4 +157,3 @@ class PasswordService:
             session.add(user)
             session.commit()
         return ok
-
