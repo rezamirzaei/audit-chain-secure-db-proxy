@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from ..api.auth_use_cases import AuthLoginUseCases
 from ..api.schemas import LoginApiRequest
 from ..api.support import LOGIN_BUCKET, ApiResponseFactory, LoginSessionState
-from ..services import UserService
+from ..domain import UserService
 
 
 class DatabaseAuthRoutes:
@@ -198,4 +198,3 @@ class DatabaseAuthRoutes:
         self.log_action("logout")
         session.clear()
         return self.redirect_login()
-

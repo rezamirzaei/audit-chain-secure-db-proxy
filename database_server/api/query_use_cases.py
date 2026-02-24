@@ -13,7 +13,7 @@ from .schemas import (
     TableSummary,
 )
 from .support import AUTH_USERS_TABLE, ApiResponseFactory, JsonBody, JsonResponse
-from ..services import AuditService, QueryService, SchemaService, TableService
+from ..domain import AuditService, QueryService, SchemaService, TableService
 
 
 @dataclass

@@ -6,8 +6,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..auth_utils import PasswordService, TotpService
+from ..domain import build_audit_payload, hash_audit_payload
 from ..models import AuditLog, AuthUser, Base, Department, Employee, Project
-from ..services import build_audit_payload, hash_audit_payload
 from .session_manager import DatabaseSessionManager
 
 

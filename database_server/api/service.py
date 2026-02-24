@@ -14,7 +14,7 @@ from .support import (
     PasswordServiceLike,
     TotpServiceLike,
 )
-from ..services import AuditService, QueryService, SchemaService, TableService, UserService
+from ..domain import AuditService, QueryService, SchemaService, TableService, UserService
 
 
 class DatabaseApiService:

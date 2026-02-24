@@ -14,7 +14,7 @@ from .support import (
     PasswordServiceLike,
     TotpServiceLike,
 )
-from ..services import UserService
+from ..domain import UserService
 
 
 @dataclass

@@ -11,7 +11,7 @@ import os
 from sqlalchemy.orm import Session
 
 from ..db import DatabaseSessionManager, load_db_config
-from ..services import AuditService
+from ..domain import AuditService
 
 
 def verify_chain(session: Session) -> tuple[bool, dict[str, object] | None]:
@@ -38,4 +38,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
