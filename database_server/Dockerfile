@@ -15,4 +15,4 @@ ENV PYTHONPATH=/app
 
 EXPOSE 5000
 
-CMD ["python", "-m", "database_server.app"]
+CMD ["python", "-m", "database_server"]

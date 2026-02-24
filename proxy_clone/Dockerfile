@@ -13,4 +13,4 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8080
 
-CMD ["python", "-m", "proxy_clone.app"]
+CMD ["python", "-m", "proxy_clone"]
