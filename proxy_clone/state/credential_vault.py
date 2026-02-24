@@ -118,43 +118,25 @@ class CredentialVault:
         self.client.new_session()
 
     def reset_auth(self, clear_credentials: bool = False) -> None:
-        if clear_credentials:
-            self.credentials = {}
-        self.totp_info = {}
-        self.security_info = {}
-        self.session_cookies = {}
-        self.active_session = None
-        self.auth_state = {}
-        self.last_login = None
+        self._state.reset(clear_credentials=clear_credentials)
         self.new_session()
 
     def store_credentials(self, username: Any, password: Any) -> None:
         self.reset_auth(clear_credentials=False)
-        self.credentials = {
-            "username": username,
-            "password": password,
-            "captured_at": self.current_time_iso(),
-        }
+        self._state.record_credentials(username, password, captured_at=self.current_time_iso())
 
     def store_totp_code(self, totp_code: Any) -> None:
-        self.totp_info = {
-            "last_code": totp_code,
-            "captured_at": self.current_time_iso(),
-        }
+        self._state.record_totp_code(totp_code, captured_at=self.current_time_iso())
 
     def store_security_answer(self, question: Any, answer: Any) -> None:
-        self.security_info = {
-            "question": question,
-            "answer": answer,
-            "captured_at": self.current_time_iso(),
-        }
+        self._state.record_security_answer(question, answer, captured_at=self.current_time_iso())
 
     def store_cookies(self, cookies: Any) -> None:
         try:
-            self.session_cookies = requests.utils.dict_from_cookiejar(cookies)
+            cookies_dict = requests.utils.dict_from_cookiejar(cookies)
         except Exception:  # pragma: no cover - defensive conversion fallback
-            self.session_cookies = dict(cookies)
-        self.last_login = self.current_time()
+            cookies_dict = dict(cookies)
+        self._state.record_session_cookies(cookies_dict, last_login=self.current_time())
 
     def login_request(self, payload: JsonDict) -> tuple[requests.Response, JsonDict]:
         return self.client.post_json(self.config.upstream_login_path, payload, timeout=self.config.login_timeout_seconds)

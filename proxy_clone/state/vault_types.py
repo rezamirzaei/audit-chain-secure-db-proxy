@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from .upstream_client import JsonDict
 
@@ -35,3 +36,25 @@ class CredentialVaultState:
     active_session: bool | None = None
     last_login: datetime | None = None
 
+    def reset(self, *, clear_credentials: bool) -> None:
+        if clear_credentials:
+            self.credentials = {}
+        self.totp_info = {}
+        self.security_info = {}
+        self.session_cookies = {}
+        self.auth_state = {}
+        self.active_session = None
+        self.last_login = None
+
+    def record_credentials(self, username: Any, password: Any, *, captured_at: str) -> None:
+        self.credentials = {"username": username, "password": password, "captured_at": captured_at}
+
+    def record_totp_code(self, totp_code: Any, *, captured_at: str) -> None:
+        self.totp_info = {"last_code": totp_code, "captured_at": captured_at}
+
+    def record_security_answer(self, question: Any, answer: Any, *, captured_at: str) -> None:
+        self.security_info = {"question": question, "answer": answer, "captured_at": captured_at}
+
+    def record_session_cookies(self, cookies: JsonDict, *, last_login: datetime) -> None:
+        self.session_cookies = dict(cookies)
+        self.last_login = last_login
