@@ -3,21 +3,16 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Protocol, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from flask import jsonify, redirect, url_for
+
+from .types import ProxyVaultLike
 
 F = TypeVar("F", bound=Callable[..., Any])
 
 WAITING_TOTP_STEP = "waiting_totp"
 WAITING_SECURITY_STEP = "waiting_security"
-
-
-class VaultLike(Protocol):
-    credentials: dict[str, Any]
-    auth_state: dict[str, Any]
-
-    def ensure_session(self) -> bool: ...
 
 
 def pending_connect_step(auth_state: Mapping[str, Any]) -> str | None:
@@ -34,7 +29,7 @@ def pending_connect_step(auth_state: Mapping[str, Any]) -> str | None:
 class ProxyAuthGuards:
     """Auth-related decorators for the proxy web server."""
 
-    vault: VaultLike
+    vault: ProxyVaultLike
 
     def redirect_for_pending_proxy_auth(self) -> str:
         step = pending_connect_step(self.vault.auth_state)
@@ -65,4 +60,3 @@ class ProxyAuthGuards:
             return f(*args, **kwargs)
 
         return cast(F, decorated_function)
-

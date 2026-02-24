@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from flask import Blueprint, Response, jsonify, request
 
 from shared.request_validation import RequestValidatorLike
+from ..state.protocols import ProxyVaultLike
 
 DecoratorFunc = Callable[[Any], Any]
 ApiServiceFactory = Callable[[], Any]
@@ -24,16 +25,11 @@ class ProxyApiBlueprintDependencies:
     vault: Any
 
 
-class VaultLike(Protocol):
-    def ensure_session(self) -> bool: ...
-    def proxy_request(self, method: str, path: str, **kwargs: Any) -> Any | None: ...
-
-
 class ProxyApiController:
     def __init__(self, deps: ProxyApiBlueprintDependencies) -> None:
         self.deps = deps
         self.request_validator: RequestValidatorLike = deps.request_validator
-        self.vault: VaultLike = deps.vault
+        self.vault: ProxyVaultLike = deps.vault
         self.connect_request_model = deps.connect_request_model
         self.query_request_model = deps.query_request_model
         self.table_path_model = deps.table_path_model
@@ -41,7 +37,7 @@ class ProxyApiController:
     def api_service(self) -> Any:
         return self.deps.api_service_factory()
 
-    def require_proxy_session(self, not_connected_message: str) -> tuple[VaultLike | None, Any | None]:
+    def require_proxy_session(self, not_connected_message: str) -> tuple[ProxyVaultLike | None, Any | None]:
         if self.vault.ensure_session():
             return self.vault, None
         return None, (jsonify({"error": not_connected_message}), 401)

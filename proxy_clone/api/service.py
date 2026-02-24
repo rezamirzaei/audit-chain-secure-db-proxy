@@ -1,28 +1,20 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Protocol
+from typing import Any
 
 from .schemas import ApiErrorResponse, ConnectApiRequest, HealthResponse, PublicStatusResponse, VaultStatusResponse
+from ..state.protocols import ProxyVaultLike
 
 JsonBody = dict[str, Any]
 JsonResponse = tuple[JsonBody, int]
 ConnectStepHandler = Callable[[ConnectApiRequest], JsonResponse]
 
 
-class VaultLike(Protocol):
-    credentials: dict[str, Any]
-
-    def get_status(self) -> dict[str, Any]: ...
-    def get_public_status(self) -> dict[str, Any]: ...
-    def store_credentials(self, username: Any, password: Any) -> None: ...
-    def login(self, totp_code: str | None = None, security_answer: str | None = None) -> dict[str, Any]: ...
-
-
 class ProxyApiService:
     """Encapsulates proxy-owned JSON API business logic."""
 
-    def __init__(self, *, vault: VaultLike, demo_mode: bool):
+    def __init__(self, *, vault: ProxyVaultLike, demo_mode: bool):
         self.vault = vault
         self.demo_mode = demo_mode
         self._connect_step_handlers: dict[str, ConnectStepHandler] = {
