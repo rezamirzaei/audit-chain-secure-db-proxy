@@ -6,19 +6,10 @@ from typing import Any
 
 import requests
 
-from .auth_flow import (
-    PASSWORD_STEP,
-    WAITING_SECURITY_STEP,
-    WAITING_TOTP_STEP,
-    LoginAttempt,
-    LoginOutcome,
-    LoginReply,
-    current_auth_step,
-    determine_login_attempt,
-    interpret_login_reply,
-)
 from .upstream_client import JsonDict, UpstreamClient
 from .vault_types import CredentialVaultConfig, CredentialVaultState
+from .vault_login import VaultLoginEngine
+from .vault_proxy import VaultProxyEngine
 
 
 class CredentialVault:
@@ -50,6 +41,19 @@ class CredentialVault:
         )
 
         self._state = state or CredentialVaultState()
+        self._login = VaultLoginEngine(
+            client=self.client,
+            config=self.config,
+            state=self._state,
+            debug=self.debug,
+            now_fn=self.current_time,
+        )
+        self._proxy = VaultProxyEngine(
+            client=self.client,
+            config=self.config,
+            state=self._state,
+            login_fn=self._login.multi_step_login,
+        )
 
     @property
     def state(self) -> CredentialVaultState:
@@ -134,57 +138,31 @@ class CredentialVault:
         self._state.record_credentials(username, password, captured_at=self.current_time_iso())
 
     def store_totp_code(self, totp_code: Any) -> None:
-        self._state.record_totp_code(totp_code, captured_at=self.current_time_iso())
+        self._login.store_totp_code(totp_code)
 
     def store_security_answer(self, question: Any, answer: Any) -> None:
-        self._state.record_security_answer(question, answer, captured_at=self.current_time_iso())
+        self._login.store_security_answer(question, answer)
 
     def store_cookies(self, cookies: Any) -> None:
-        try:
-            cookies_dict = requests.utils.dict_from_cookiejar(cookies)
-        except Exception:  # pragma: no cover - defensive conversion fallback
-            cookies_dict = dict(cookies)
-        self._state.record_session_cookies(cookies_dict, last_login=self.current_time())
+        self._login.store_cookies(cookies)
 
     def login_request(self, payload: JsonDict) -> tuple[requests.Response, JsonDict]:
-        return self.client.post_json(self.config.upstream_login_path, payload, timeout=self.config.login_timeout_seconds)
+        return self._login.login_request(payload)
 
     def error_result(self, message: str, *, state: JsonDict | None = None) -> JsonDict:
-        result: JsonDict = {"success": False, "error": message}
-        if state is not None:
-            result["state"] = state
-        return result
+        return self._login.error_result(message, state=state)
 
     def mark_authenticated(self, data: JsonDict) -> JsonDict:
-        self.store_cookies(self.client.session.cookies)
-        self.active_session = True
-        self.auth_state = {"authenticated": True, "user": data.get("user")}
-        return {"success": True, "data": data}
+        return self._login.mark_authenticated(data)
 
     def require_security(self, question: Any, data: JsonDict) -> JsonDict:
-        self.auth_state["current_step"] = WAITING_SECURITY_STEP
-        self.auth_state["security_question"] = question
-        return {
-            "success": False,
-            "error": "Security question verification required",
-            "requires_security": True,
-            "security_question": question,
-            "message": "Please answer your security question",
-            "state": data,
-        }
+        return self._login.require_security(question, data)
 
     def require_totp(self, data: JsonDict) -> JsonDict:
-        self.auth_state["current_step"] = WAITING_TOTP_STEP
-        return {
-            "success": False,
-            "error": "Two-factor authentication required",
-            "requires_totp": True,
-            "message": "Please enter your 2FA code from your authenticator app",
-            "state": data,
-        }
+        return self._login.require_totp(data)
 
     def reset_to_password_step(self) -> None:
-        self.auth_state = {"current_step": PASSWORD_STEP}
+        self._login.reset_to_password_step()
 
     def finalize_login_step_result(
         self,
@@ -196,149 +174,66 @@ class CredentialVault:
         include_state_on_incomplete: bool = False,
         reset_password_on_invalid_session: bool = False,
     ) -> JsonDict:
-        outcome = interpret_login_reply(
-            LoginReply(status_code=response.status_code, data=data),
+        return self._login.finalize_login_step_result(
+            response=response,
+            data=data,
             failure_message=failure_message,
             incomplete_message=incomplete_message,
             include_state_on_incomplete=include_state_on_incomplete,
             reset_password_on_invalid_session=reset_password_on_invalid_session,
         )
 
-        return self.apply_login_outcome(
+    def apply_login_outcome(
+        self,
+        outcome: Any,
+        *,
+        failure_message: str,
+        incomplete_message: str,
+    ) -> JsonDict:
+        return self._login.apply_login_outcome(
             outcome,
             failure_message=failure_message,
             incomplete_message=incomplete_message,
         )
 
-    def apply_login_outcome(
-        self,
-        outcome: LoginOutcome,
-        *,
-        failure_message: str,
-        incomplete_message: str,
-    ) -> JsonDict:
-        if outcome.reset_to_password:
-            self.reset_to_password_step()
-
-        if outcome.kind == "error":
-            return self.error_result(str(outcome.error or failure_message))
-        if outcome.kind == "require_totp":
-            return self.require_totp(outcome.state or {})
-        if outcome.kind == "require_security":
-            return self.require_security(outcome.security_question, outcome.state or {})
-        if outcome.kind == "authenticated":
-            return self.mark_authenticated(outcome.authenticated_data or {})
-        return self.error_result(str(outcome.error or incomplete_message), state=outcome.state)
-
     def handle_totp_step(self, totp_code: str) -> JsonDict:
-        self.debug("Sending TOTP code to server...")
-        self.store_totp_code(totp_code)
-        response, data = self.login_request({"step": "totp", "totp_code": totp_code})
-        return self.finalize_login_step_result(
-            response=response,
-            data=data,
-            failure_message="2FA verification failed",
-            incomplete_message="Authentication failed after 2FA",
-            reset_password_on_invalid_session=True,
-        )
+        return self._login.handle_totp_step(totp_code)
 
     def handle_security_step(self, security_answer: str) -> JsonDict:
-        question = self.auth_state.get("security_question", "")
-        self.store_security_answer(question, security_answer)
-        response, data = self.login_request({"step": "security", "security_answer": security_answer})
-        return self.finalize_login_step_result(
-            response=response,
-            data=data,
-            failure_message="Security verification failed",
-            incomplete_message="Authentication failed after security question",
-        )
+        return self._login.handle_security_step(security_answer)
 
     def password_login_payload(self) -> JsonDict:
-        return {
-            "step": "password",
-            "username": self.credentials["username"],
-            "password": self.credentials["password"],
-        }
+        return self._login.password_login_payload()
 
     def handle_password_step(self) -> JsonDict:
-        self.reset_to_password_step()
-        response, data = self.login_request(self.password_login_payload())
-        return self.finalize_login_step_result(
-            response=response,
-            data=data,
-            failure_message="Password verification failed",
-            incomplete_message="Authentication incomplete",
-            include_state_on_incomplete=True,
-        )
+        return self._login.handle_password_step()
 
     def determine_login_attempt(self, *, totp_code: str | None, security_answer: str | None) -> LoginAttempt:
-        step = current_auth_step(self.auth_state)
-        self.debug("current_step = %s", step)
-        return determine_login_attempt(self.auth_state, totp_code=totp_code, security_answer=security_answer)
+        return self._login.determine_login_attempt(totp_code=totp_code, security_answer=security_answer)
 
     def run_login_attempt(self, attempt: LoginAttempt) -> JsonDict:
-        if attempt.handler == "password":
-            return self.handle_password_step()
-        if attempt.handler == "totp":
-            return self.handle_totp_step(attempt.value or "")
-        return self.handle_security_step(attempt.value or "")
+        return self._login.run_login_attempt(attempt)
 
     def multi_step_login(self, totp_code: str | None = None, security_answer: str | None = None) -> JsonDict:
-        self.debug(
-            "multi_step_login called - totp_code=%s, security_answer=%s",
-            bool(totp_code),
-            bool(security_answer),
-        )
-        self.debug("current auth_state = %s", self.auth_state)
-
-        if not self.credentials:
-            return {"success": False, "error": "No credentials stored"}
-
-        try:
-            attempt = self.determine_login_attempt(totp_code=totp_code, security_answer=security_answer)
-            return self.run_login_attempt(attempt)
-        except Exception as exc:  # pragma: no cover - network/client failures
-            return {"success": False, "error": str(exc)}
+        return self._login.multi_step_login(totp_code=totp_code, security_answer=security_answer)
 
     def login(self, totp_code: str | None = None, security_answer: str | None = None) -> JsonDict:
         return self.multi_step_login(totp_code, security_answer)
 
     def upstream_session_authenticated(self) -> bool:
-        response, data = self.client.get_json(
-            self.config.upstream_session_path,
-            timeout=self.config.session_check_timeout_seconds,
-        )
-        if response.status_code != 200:
-            return False
-        return bool(data.get("authenticated"))
+        return self._proxy.upstream_session_authenticated()
 
     def reauthenticate(self) -> bool:
-        result = self.login(security_answer=self.security_info.get("answer"))
-        return bool(result.get("success", False))
+        return self._proxy.reauthenticate()
 
     def ensure_session(self) -> bool:
-        if not self.credentials:
-            return False
-
-        try:
-            if self.upstream_session_authenticated():
-                return True
-        except Exception:
-            pass
-
-        return self.reauthenticate()
+        return self._proxy.ensure_session()
 
     def request_upstream(self, method: str, path: str, **kwargs: Any) -> requests.Response:
-        return self.client.request(method, path, timeout=self.config.proxy_request_timeout_seconds, **kwargs)
+        return self._proxy.request_upstream(method, path, **kwargs)
 
     def proxy_request(self, method: str, path: str, **kwargs: Any) -> Any | None:
-        if not self.ensure_session():
-            return None
-
-        try:
-            return self.request_upstream(method, path, **kwargs)
-        except Exception:
-            return None
+        return self._proxy.proxy_request(method, path, **kwargs)
 
     def get_status(self) -> dict[str, Any]:
         return {
