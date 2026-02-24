@@ -1,7 +1,11 @@
 from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
 from database_server.api_support import LoginSessionState
+from database_server.api_schemas import LoginApiRequest
 from database_server.services import build_audit_payload, hash_audit_payload
-from database_server.web_routes import DatabaseWebRoutes
 
 
 def test_build_audit_payload_preserves_delimiters_for_missing_fields():
@@ -40,8 +44,13 @@ def test_login_session_state_pending_user_id_parses_and_rejects_invalid_values()
     assert state.pending_user_id() is None
 
 
-def test_database_web_routes_validates_totp_format():
-    assert DatabaseWebRoutes.is_valid_totp_code("") is False
-    assert DatabaseWebRoutes.is_valid_totp_code("12345") is False
-    assert DatabaseWebRoutes.is_valid_totp_code("12ab56") is False
-    assert DatabaseWebRoutes.is_valid_totp_code("123456") is True
+def test_login_api_request_validates_totp_format():
+    with pytest.raises(ValidationError):
+        LoginApiRequest(step="totp", totp_code="")
+    with pytest.raises(ValidationError):
+        LoginApiRequest(step="totp", totp_code="12345")
+    with pytest.raises(ValidationError):
+        LoginApiRequest(step="totp", totp_code="12ab56")
+
+    payload = LoginApiRequest(step="totp", totp_code="123456")
+    assert payload.totp_code == "123456"

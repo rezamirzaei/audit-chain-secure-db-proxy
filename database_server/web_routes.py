@@ -127,10 +127,6 @@ class DatabaseWebRoutes:
         return self.redirect_dashboard()
 
     @staticmethod
-    def is_valid_totp_code(code: str) -> bool:
-        return bool(code) and code.isdigit() and len(code) == 6
-
-    @staticmethod
     def dashboard_stats_payload(db_session: Any) -> dict[str, Any]:
         return {
             "employees": db_session.execute(select(func.count(Employee.id))).scalar_one(),
