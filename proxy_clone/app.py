@@ -26,7 +26,7 @@ from .api import (
     create_api_blueprint,
 )
 from .bootstrap import ProxyCloneBootstrap
-from .common import (
+from shared.web_common import (
     ContextInjector,
     SecurityHeadersManager,
     create_feature_enabled_decorator,
@@ -35,7 +35,7 @@ from .common import (
 )
 from .config import ProxyCloneConfig
 from .runtime import ProxyCloneRuntime, create_runtime
-from .ssl_utils import get_ssl_context
+from shared.ssl_utils import get_ssl_context
 from .state import CredentialVault, VaultRegistry
 from .web import ProxyAuthGuards
 from .web.routes import ProxyWebRouteDependencies, register_web_routes

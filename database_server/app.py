@@ -34,7 +34,7 @@ from .api.schemas import (
     TotpCurrentResponse,
 )
 from .bootstrap import AppBootstrap
-from .common import (
+from shared.web_common import (
     ContextInjector,
     SecurityHeadersManager,
     enforce_csrf,
@@ -45,7 +45,7 @@ from .config import AppConfig
 from .db import init_db as init_database
 from .runtime import DatabaseServerRuntime, create_runtime
 from .domain import AuditService, QueryService, SchemaService, TableService, UserService
-from .ssl_utils import get_ssl_context
+from shared.ssl_utils import get_ssl_context
 from .web import DatabaseWebRoutes
 
 PENDING_SESSION_KEYS = (

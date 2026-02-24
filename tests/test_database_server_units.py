@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from database_server.api_support import LoginSessionState
-from database_server.api_schemas import LoginApiRequest
-from database_server.services import build_audit_payload, hash_audit_payload
+from database_server.api.support import LoginSessionState
+from database_server.api.schemas import LoginApiRequest
+from database_server.domain import build_audit_payload, hash_audit_payload
 
 
 def test_build_audit_payload_preserves_delimiters_for_missing_fields():

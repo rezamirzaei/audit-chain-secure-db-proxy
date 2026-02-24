@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from database_server.db_config import load_db_config_from_env, sqlite_db_path_for_runtime
+from database_server.persistence import load_db_config_from_env, sqlite_db_path_for_runtime
 
 
 def test_sqlite_db_path_for_runtime_prefers_override():
@@ -37,4 +37,3 @@ def test_load_db_config_from_env_prefers_postgres_when_dsn_present():
 def test_load_db_config_from_env_raises_when_postgres_requested_without_dsn():
     with pytest.raises(RuntimeError):
         load_db_config_from_env({"DB_BACKEND": "postgres"}, sqlite_path="/tmp/test.db")
-

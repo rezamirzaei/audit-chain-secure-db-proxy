@@ -1,7 +1,6 @@
 """Domain/business logic for database_server.
 
 This package groups service objects that encapsulate DB access and business rules.
-The legacy `database_server.services` module re-exports these for compatibility.
 """
 
 from .audit import (

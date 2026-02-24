@@ -6,8 +6,7 @@ import secrets
 from pydantic import BaseModel, ConfigDict
 
 from shared.env_utils import parse_bool, parse_int
-
-from .ssl_utils import SSLConfig
+from shared.ssl_utils import SSLConfig
 
 
 class AppConfig(BaseModel):

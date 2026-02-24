@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from types import SimpleNamespace
 
-from database_server.services import build_audit_payload, hash_audit_payload, verify_audit_chain
+from database_server.domain import build_audit_payload, hash_audit_payload, verify_audit_chain
 
 
 def make_row(*, row_id: int, prev_hash: str, timestamp: datetime, query: str) -> SimpleNamespace:
@@ -51,4 +51,3 @@ def test_verify_audit_chain_detects_tampering():
     ok, info = verify_audit_chain([row1, row2])
     assert ok is False
     assert info and info["id"] == 2
-

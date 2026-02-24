@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 from flask import Flask
 
-from proxy_clone.api_blueprint import ProxyApiBlueprintDependencies, ProxyApiController
-from proxy_clone.auth_guards import pending_connect_step
+from proxy_clone.api.blueprint import ProxyApiBlueprintDependencies, ProxyApiController
+from proxy_clone.web.auth_guards import pending_connect_step
 from proxy_clone.state.credential_vault import CredentialVault
-from proxy_clone.web_routes import ProxyWebController
+from proxy_clone.web.routes import ProxyWebController
 
 
 class DummyHttpSession:
