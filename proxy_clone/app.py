@@ -15,11 +15,16 @@ from typing import Any
 from flask import Flask, session
 from werkzeug.local import LocalProxy
 
-from .auth_guards import ProxyAuthGuards
-from .api_blueprint import ProxyApiBlueprintDependencies, create_api_blueprint
-from .api_schemas import ConnectApiRequest, QueryApiRequest, TablePathParams
-from .api_services import ProxyApiService
-from .api_validation import RequestPayloadValidationError, RequestValidator
+from .api import (
+    ConnectApiRequest,
+    ProxyApiBlueprintDependencies,
+    ProxyApiService,
+    QueryApiRequest,
+    RequestPayloadValidationError,
+    RequestValidator,
+    TablePathParams,
+    create_api_blueprint,
+)
 from .bootstrap import ProxyCloneBootstrap
 from .common import (
     ContextInjector,
@@ -31,9 +36,9 @@ from .common import (
 from .config import ProxyCloneConfig
 from .runtime import ProxyCloneRuntime, create_runtime
 from .ssl_utils import get_ssl_context
-from .state.credential_vault import CredentialVault
-from .state.vault_registry import VaultRegistry
-from .web_routes import ProxyWebRouteDependencies, register_web_routes
+from .state import CredentialVault, VaultRegistry
+from .web import ProxyAuthGuards
+from .web.routes import ProxyWebRouteDependencies, register_web_routes
 
 
 @dataclass(frozen=True)

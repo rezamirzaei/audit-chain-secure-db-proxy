@@ -16,8 +16,14 @@ from typing import Any, MutableMapping, cast
 
 from flask import Flask, g, request, session
 
-from .api_blueprint import DatabaseApiBlueprintDependencies, create_api_blueprint
-from .api_schemas import (
+from .api import (
+    DatabaseApiBlueprintDependencies,
+    DatabaseApiService,
+    RequestPayloadValidationError,
+    RequestValidator,
+    create_api_blueprint,
+)
+from .api.schemas import (
     HealthResponse,
     LoginApiRequest,
     LogoutResponse,
@@ -27,8 +33,6 @@ from .api_schemas import (
     TablePathParams,
     TotpCurrentResponse,
 )
-from .api_services import DatabaseApiService
-from .api_validation import RequestPayloadValidationError, RequestValidator
 from .bootstrap import AppBootstrap
 from .common import (
     ContextInjector,
@@ -40,9 +44,9 @@ from .common import (
 from .config import AppConfig
 from .db import init_db as init_database
 from .runtime import DatabaseServerRuntime, create_runtime
-from .services import AuditService, QueryService, SchemaService, TableService, UserService
+from .domain import AuditService, QueryService, SchemaService, TableService, UserService
 from .ssl_utils import get_ssl_context
-from .web_routes import DatabaseWebRoutes
+from .web import DatabaseWebRoutes
 
 PENDING_SESSION_KEYS = (
     "pending_totp_secret",
@@ -223,4 +227,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
