@@ -5,11 +5,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-class _StrictModel(BaseModel):
+class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
-class ConnectApiRequest(_StrictModel):
+class ConnectApiRequest(StrictModel):
     step: Literal["password", "totp", "security"] = "password"
     username: str | None = None
     password: str | None = None
@@ -38,7 +38,7 @@ class ConnectApiRequest(_StrictModel):
         return self
 
 
-class QueryApiRequest(_StrictModel):
+class QueryApiRequest(StrictModel):
     query: str
 
     @field_validator("query", mode="before")
@@ -56,24 +56,24 @@ class QueryApiRequest(_StrictModel):
         return value
 
 
-class _ResponseModel(BaseModel):
+class ResponseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class _ParamModel(BaseModel):
+class ParamModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=False)
 
 
-class ApiErrorResponse(_ResponseModel):
+class ApiErrorResponse(ResponseModel):
     error: str
 
 
-class HealthResponse(_ResponseModel):
+class HealthResponse(ResponseModel):
     status: Literal["ok"]
     demo_mode: bool
 
 
-class PublicStatusResponse(_ResponseModel):
+class PublicStatusResponse(ResponseModel):
     has_credentials: bool
     has_totp: bool
     has_security_answer: bool
@@ -81,7 +81,7 @@ class PublicStatusResponse(_ResponseModel):
     active: bool
 
 
-class VaultStatusResponse(_ResponseModel):
+class VaultStatusResponse(ResponseModel):
     has_credentials: bool
     username: str | None = None
     captured_at: str | None = None
@@ -94,5 +94,5 @@ class VaultStatusResponse(_ResponseModel):
     auth_state: dict[str, Any]
 
 
-class TablePathParams(_ParamModel):
+class TablePathParams(ParamModel):
     table_name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")

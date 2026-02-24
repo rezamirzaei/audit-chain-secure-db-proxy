@@ -5,11 +5,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-class _StrictModel(BaseModel):
+class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
-class LoginApiRequest(_StrictModel):
+class LoginApiRequest(StrictModel):
     step: Literal["password", "totp", "security"] = "password"
     username: str | None = None
     password: str | None = None
@@ -38,7 +38,7 @@ class LoginApiRequest(_StrictModel):
         return self
 
 
-class QueryApiRequest(_StrictModel):
+class QueryApiRequest(StrictModel):
     query: str
 
     @field_validator("query", mode="before")
@@ -56,26 +56,26 @@ class QueryApiRequest(_StrictModel):
         return value
 
 
-class _ResponseModel(BaseModel):
+class ResponseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class _ParamModel(BaseModel):
+class ParamModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=False)
 
 
-class ApiErrorResponse(_ResponseModel):
+class ApiErrorResponse(ResponseModel):
     error: str
     message: str | None = None
 
 
-class HealthResponse(_ResponseModel):
+class HealthResponse(ResponseModel):
     status: Literal["healthy"]
     timestamp: str
     database: Literal["connected"]
 
 
-class SessionResponse(_ResponseModel):
+class SessionResponse(ResponseModel):
     authenticated: bool
     user_id: int | None = None
     username: str | None = None
@@ -83,13 +83,13 @@ class SessionResponse(_ResponseModel):
     login_time: str | None = None
 
 
-class AuthenticatedUser(_ResponseModel):
+class AuthenticatedUser(ResponseModel):
     id: int
     username: str
     role: str
 
 
-class LoginStepResponse(_ResponseModel):
+class LoginStepResponse(ResponseModel):
     success: Literal[True]
     next_step: Literal["totp", "security"]
     message: str
@@ -97,40 +97,40 @@ class LoginStepResponse(_ResponseModel):
     security_question: str | None = None
 
 
-class LoginSuccessResponse(_ResponseModel):
+class LoginSuccessResponse(ResponseModel):
     success: Literal[True]
     authenticated: Literal[True]
     user: AuthenticatedUser
 
 
-class TotpCurrentResponse(_ResponseModel):
+class TotpCurrentResponse(ResponseModel):
     username: str
     totp_token: str
     valid_for_seconds: int
 
 
-class LogoutResponse(_ResponseModel):
+class LogoutResponse(ResponseModel):
     success: Literal[True]
 
 
-class TableSummary(_ResponseModel):
+class TableSummary(ResponseModel):
     name: str
     row_count: int
     columns: list[dict[str, str]]
 
 
-class TablesResponse(_ResponseModel):
+class TablesResponse(ResponseModel):
     tables: list[TableSummary]
 
 
-class QuerySuccessResponse(_ResponseModel):
+class QuerySuccessResponse(ResponseModel):
     success: Literal[True]
     columns: list[str]
     data: list[dict[str, Any]]
     row_count: int
 
 
-class TableDataResponse(_ResponseModel):
+class TableDataResponse(ResponseModel):
     success: Literal[True]
     table: str
     data: list[dict[str, Any]]
@@ -139,15 +139,15 @@ class TableDataResponse(_ResponseModel):
     offset: int
 
 
-class AuditVerifyResponse(_ResponseModel):
+class AuditVerifyResponse(ResponseModel):
     valid: bool
     info: dict[str, Any] | None
 
 
-class TablePathParams(_ParamModel):
+class TablePathParams(ParamModel):
     table_name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-class TablePaginationParams(_ParamModel):
+class TablePaginationParams(ParamModel):
     limit: int = Field(default=100, ge=1, le=1000)
     offset: int = Field(default=0, ge=0)
