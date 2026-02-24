@@ -11,6 +11,7 @@ from .auth_flow import (
     WAITING_SECURITY_STEP,
     WAITING_TOTP_STEP,
     LoginAttempt,
+    LoginOutcome,
     LoginReply,
     current_auth_step,
     determine_login_attempt,
@@ -35,18 +36,25 @@ class CredentialVault:
         now_fn: Callable[[], datetime] | None = None,
         session_factory: Callable[[], requests.Session] | None = None,
         config: CredentialVaultConfig | None = None,
+        client: UpstreamClient | None = None,
+        state: CredentialVaultState | None = None,
     ) -> None:
         self.debug_log = debug_log
         self.now_fn = now_fn or datetime.now
         self.config = config or CredentialVaultConfig()
 
-        self.client = UpstreamClient(
+        self.client = client or UpstreamClient(
             base_url=database_server_url,
             ssl_verify=ssl_verify,
             session_factory=session_factory or requests.Session,
         )
 
-        self._state = CredentialVaultState()
+        self._state = state or CredentialVaultState()
+
+    @property
+    def state(self) -> CredentialVaultState:
+        """Expose the mutable state container for higher-level orchestration and tests."""
+        return self._state
 
     @property
     def credentials(self) -> JsonDict:
@@ -196,6 +204,19 @@ class CredentialVault:
             reset_password_on_invalid_session=reset_password_on_invalid_session,
         )
 
+        return self.apply_login_outcome(
+            outcome,
+            failure_message=failure_message,
+            incomplete_message=incomplete_message,
+        )
+
+    def apply_login_outcome(
+        self,
+        outcome: LoginOutcome,
+        *,
+        failure_message: str,
+        incomplete_message: str,
+    ) -> JsonDict:
         if outcome.reset_to_password:
             self.reset_to_password_step()
 
