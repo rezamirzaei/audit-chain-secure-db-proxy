@@ -6,9 +6,15 @@ keeps that import path stable while the internals live in focused modules.
 
 from __future__ import annotations
 
-from .db_config import DbConfig, load_db_config, load_db_config_from_env, sqlite_db_path, sqlite_db_path_for_runtime
-from .db_manager import DatabaseSessionManager
-from .db_seed import DatabaseSeeder, init_db
+from .persistence.db_config import (
+    DbConfig,
+    load_db_config,
+    load_db_config_from_env,
+    sqlite_db_path,
+    sqlite_db_path_for_runtime,
+)
+from .persistence.seed import DatabaseSeeder, init_db
+from .persistence.session_manager import DatabaseSessionManager
 
 __all__ = [
     "DbConfig",
@@ -20,4 +26,3 @@ __all__ = [
     "sqlite_db_path",
     "sqlite_db_path_for_runtime",
 ]
-
