@@ -63,6 +63,12 @@ def wait_for_database_ready(
         raise last_error
 
 
+def _init_lock_id() -> int:
+    # A stable lock id avoids accidental collisions with other apps.
+    # Use a positive signed bigint (Postgres requires BIGINT range).
+    return 0x4D_4A_09_2F_7A_33_12_01
+
+
 def init_db(
     manager: DatabaseSessionManager,
     demo_mode: bool,
@@ -70,9 +76,25 @@ def init_db(
     log_info: Any,
 ) -> None:
     wait_for_database_ready(manager, log_info=log_info)
-    Base.metadata.create_all(manager.engine)
-    seeder = DatabaseSeeder(manager, demo_mode=demo_mode, enable_totp_test_endpoint=enable_totp_test_endpoint)
-    seeder.seed(log_info=log_info)
+
+    # Guard initialization against multi-process races (e.g., gunicorn workers starting together).
+    # We intentionally lock only on Postgres, where concurrent startups are common.
+    lock_conn = None
+    if manager.config.backend == "postgres":
+        lock_conn = manager.engine.connect()
+        log_info("Acquiring Postgres advisory lock for DB init...")
+        lock_conn.execute(text("SELECT pg_advisory_lock(:lock_id)"), {"lock_id": _init_lock_id()})
+
+    try:
+        Base.metadata.create_all(manager.engine)
+        seeder = DatabaseSeeder(manager, demo_mode=demo_mode, enable_totp_test_endpoint=enable_totp_test_endpoint)
+        seeder.seed(log_info=log_info)
+    finally:
+        if lock_conn is not None:
+            try:
+                lock_conn.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": _init_lock_id()})
+            finally:
+                lock_conn.close()
 
 
 class DatabaseSeeder:
