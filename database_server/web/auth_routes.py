@@ -92,9 +92,18 @@ class DatabaseAuthRoutes:
             return None
 
         raw_user_id = session.get("pending_user_id")
-        try:
-            user_id = int(raw_user_id)
-        except (TypeError, ValueError):
+        if raw_user_id is None:
+            return None
+        if isinstance(raw_user_id, bool):
+            return None
+        if isinstance(raw_user_id, int):
+            user_id = raw_user_id
+        elif isinstance(raw_user_id, str):
+            try:
+                user_id = int(raw_user_id)
+            except ValueError:
+                return None
+        else:
             return None
 
         db_session = self.get_db()

@@ -52,6 +52,7 @@ def test_database_seeder_upgrades_legacy_auth_hashes_and_defaults_totp_enabled()
     assert upgraded.password.startswith("$argon2")
     assert password_service.verify_value(upgraded.password, "plaintext")[0] is True
 
+    assert upgraded.security_answer is not None
     assert upgraded.security_answer.startswith("$argon2")
     # security_answer is normalized to lowercase before hashing.
     assert password_service.verify_value(upgraded.security_answer, "blue")[0] is True
