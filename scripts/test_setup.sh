@@ -48,6 +48,25 @@ echo "Starting containers..."
 echo "Waiting for containers to start..."
 sleep 5
 
+wait_for_url() {
+    local url="$1"
+    local name="$2"
+    local service="$3"
+    for _ in $(seq 1 60); do
+        if curl -kfsS "$url" > /dev/null 2>&1; then
+            echo "✓ $name is ready"
+            return 0
+        fi
+        sleep 2
+    done
+
+    echo "ERROR: $name did not become ready: $url"
+    echo ""
+    echo "=== ${name} Logs ==="
+    "${COMPOSE[@]}" logs "$service" || true
+    return 1
+}
+
 # Wait for Postgres
 echo ""
 echo "Waiting for Postgres to be ready..."
@@ -85,15 +104,21 @@ if ! "${COMPOSE[@]}" ps --services --filter status=running | grep -q '^database-
     exit 1
 fi
 
+# Ensure services respond to health endpoints (gives containers time to finish DB init / warm-up).
+echo ""
+echo "Waiting for service health endpoints..."
+wait_for_url "${DB_BASE_URL:-https://localhost:5002}/api/health" "Database Server" "database-server"
+wait_for_url "${PROXY_BASE_URL:-https://localhost:8080}/api/health" "Proxy Clone" "proxy-clone"
+
 # Test database server (HTTPS)
 echo ""
 echo "=== Testing Database Server (HTTPS) ==="
-curl -k -s https://localhost:5002/api/health | head -100
+curl -k -s "${DB_BASE_URL:-https://localhost:5002}/api/health" | head -100
 
 # Test proxy
 echo ""
 echo "=== Testing Proxy ==="
-curl -k -s https://localhost:8080/api/health | head -100
+curl -k -s "${PROXY_BASE_URL:-https://localhost:8080}/api/health" | head -100
 
 echo ""
 echo "=== Testing Barman (Disaster Recovery) ==="

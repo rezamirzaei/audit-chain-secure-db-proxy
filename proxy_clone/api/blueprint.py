@@ -102,7 +102,8 @@ def create_api_blueprint(deps: ProxyApiBlueprintDependencies) -> Blueprint:
     feature_enabled = deps.feature_enabled
     proxy_status_available = deps.proxy_status_available
 
-    bp.add_url_rule("/health", endpoint="api_health", view_func=feature_enabled(controller.health), methods=["GET"])
+    # Health should be available even when proxy features are disabled (for Docker/CI liveness checks).
+    bp.add_url_rule("/health", endpoint="api_health", view_func=controller.health, methods=["GET"])
     bp.add_url_rule(
         "/status",
         endpoint="api_status",

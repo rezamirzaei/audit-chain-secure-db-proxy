@@ -34,9 +34,12 @@ def proxy_client_features_disabled(monkeypatch):
     fresh.app.extensions["vault_registry"].vaults.clear()
 
 
-def test_proxy_status_disabled_when_feature_off(proxy_client_features_disabled):
+def test_proxy_health_available_when_feature_off(proxy_client_features_disabled):
     health_resp = proxy_client_features_disabled.get("/api/health")
-    assert health_resp.status_code == 404
+    assert health_resp.status_code == 200
+    assert health_resp.get_json()["status"] == "ok"
+    assert health_resp.get_json()["demo_mode"] is False
+
     resp = proxy_client_features_disabled.get("/api/status")
     assert resp.status_code == 404
 

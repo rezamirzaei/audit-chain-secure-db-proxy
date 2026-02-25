@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Iterator
 
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from ..security.credentials import PasswordService, TotpService
@@ -69,6 +71,44 @@ def _init_lock_id() -> int:
     return 0x4D_4A_09_2F_7A_33_12_01
 
 
+@contextmanager
+def _postgres_advisory_lock(engine: Engine, *, lock_id: int, log_info: Any) -> Iterator[None]:
+    """Acquire a Postgres advisory lock and release it on exit.
+
+    This is intended to serialize startup initialization, especially when a WSGI
+    server starts multiple workers concurrently (e.g., gunicorn).
+    """
+
+    # Avoid holding an open transaction while we initialize the schema.
+    conn = engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+    acquired = False
+    try:
+        log_info("Acquiring Postgres advisory lock for DB init...")
+        conn.execute(text("SELECT pg_advisory_lock(:lock_id)"), {"lock_id": lock_id})
+        acquired = True
+        yield
+    finally:
+        if acquired:
+            try:
+                conn.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": lock_id})
+            finally:
+                conn.close()
+        else:
+            conn.close()
+
+
+def _create_schema_and_seed(
+    manager: DatabaseSessionManager,
+    *,
+    demo_mode: bool,
+    enable_totp_test_endpoint: bool,
+    log_info: Any,
+) -> None:
+    Base.metadata.create_all(manager.engine)
+    seeder = DatabaseSeeder(manager, demo_mode=demo_mode, enable_totp_test_endpoint=enable_totp_test_endpoint)
+    seeder.seed(log_info=log_info)
+
+
 def init_db(
     manager: DatabaseSessionManager,
     demo_mode: bool,
@@ -77,24 +117,22 @@ def init_db(
 ) -> None:
     wait_for_database_ready(manager, log_info=log_info)
 
-    # Guard initialization against multi-process races (e.g., gunicorn workers starting together).
-    # We intentionally lock only on Postgres, where concurrent startups are common.
-    lock_conn = None
     if manager.config.backend == "postgres":
-        lock_conn = manager.engine.connect()
-        log_info("Acquiring Postgres advisory lock for DB init...")
-        lock_conn.execute(text("SELECT pg_advisory_lock(:lock_id)"), {"lock_id": _init_lock_id()})
+        with _postgres_advisory_lock(manager.engine, lock_id=_init_lock_id(), log_info=log_info):
+            _create_schema_and_seed(
+                manager,
+                demo_mode=demo_mode,
+                enable_totp_test_endpoint=enable_totp_test_endpoint,
+                log_info=log_info,
+            )
+        return
 
-    try:
-        Base.metadata.create_all(manager.engine)
-        seeder = DatabaseSeeder(manager, demo_mode=demo_mode, enable_totp_test_endpoint=enable_totp_test_endpoint)
-        seeder.seed(log_info=log_info)
-    finally:
-        if lock_conn is not None:
-            try:
-                lock_conn.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": _init_lock_id()})
-            finally:
-                lock_conn.close()
+    _create_schema_and_seed(
+        manager,
+        demo_mode=demo_mode,
+        enable_totp_test_endpoint=enable_totp_test_endpoint,
+        log_info=log_info,
+    )
 
 
 class DatabaseSeeder:

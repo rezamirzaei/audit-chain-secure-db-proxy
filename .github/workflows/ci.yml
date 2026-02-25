@@ -18,6 +18,8 @@ jobs:
           python -m pip install -r database_server/requirements.txt -r proxy_clone/requirements.txt -r requirements-dev.txt
       - name: Ruff
         run: ruff check .
+      - name: Mypy
+        run: mypy .
       - name: Pytest
         run: pytest
 

@@ -89,11 +89,17 @@ services:
       - redis
     networks:
       - app-network
+    restart: unless-stopped
+    command: ["gunicorn", "-c", "database_server/server/gunicorn_conf.py", "database_server.server.wsgi:app"]
     healthcheck:
-      test: ["CMD", "curl", "-k", "-f", "https://localhost:5000/api/health"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -kfsS https://localhost:5000/api/health >/dev/null || curl -fsS http://localhost:5000/api/health >/dev/null",
+        ]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 10
 
   # Container 2: Proxy Clone / Gateway
   # - Own HOME interface for end users to write queries
@@ -124,6 +130,16 @@ services:
     restart: unless-stopped
     volumes:
       - ./proxy_clone/certs:/app/certs:ro
+    command: ["gunicorn", "-c", "proxy_clone/server/gunicorn_conf.py", "proxy_clone.server.wsgi:app"]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -kfsS https://localhost:8080/api/health >/dev/null || curl -fsS http://localhost:8080/api/health >/dev/null",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 10
 
   redis:
     image: redis:7-alpine
