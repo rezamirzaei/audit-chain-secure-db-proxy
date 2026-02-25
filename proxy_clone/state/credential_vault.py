@@ -6,7 +6,8 @@ from typing import Any
 
 import requests
 
-from .upstream_client import JsonDict, UpstreamClient
+from .auth_flow import LoginAttempt
+from .upstream_client import JsonDict, SessionLike, UpstreamClient, default_session_factory
 from .vault_types import CredentialVaultConfig, CredentialVaultState
 from .vault_login import VaultLoginEngine
 from .vault_proxy import VaultProxyEngine
@@ -25,7 +26,7 @@ class CredentialVault:
         ssl_verify: bool,
         debug_log: Callable[..., None] | None = None,
         now_fn: Callable[[], datetime] | None = None,
-        session_factory: Callable[[], requests.Session] | None = None,
+        session_factory: Callable[[], SessionLike] | None = None,
         config: CredentialVaultConfig | None = None,
         client: UpstreamClient | None = None,
         state: CredentialVaultState | None = None,
@@ -37,7 +38,7 @@ class CredentialVault:
         self.client = client or UpstreamClient(
             base_url=database_server_url,
             ssl_verify=ssl_verify,
-            session_factory=session_factory or requests.Session,
+            session_factory=session_factory or default_session_factory,
         )
 
         self._state = state or CredentialVaultState()

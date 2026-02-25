@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from flask import Flask, session
 from werkzeug.local import LocalProxy
@@ -36,7 +36,7 @@ from shared.web_common import (
 from .config import ProxyCloneConfig
 from .runtime import ProxyCloneRuntime, create_runtime
 from shared.ssl_utils import get_ssl_context
-from ..state import CredentialVault, VaultRegistry
+from ..state import CredentialVault, ProxyVaultLike, VaultRegistry
 from ..web import ProxyAuthGuards
 from ..web.routes import ProxyWebRouteDependencies, register_web_routes
 
@@ -96,7 +96,7 @@ def create_app(
     def drop_current_vault() -> None:
         vault_registry.drop_current(session)
 
-    vault = LocalProxy(current_vault)
+    vault: ProxyVaultLike = cast(ProxyVaultLike, LocalProxy(current_vault))
 
     feature_enabled = create_feature_enabled_decorator(config.proxy_features_enabled)
 
@@ -160,5 +160,4 @@ def main() -> None:
     else:
         runtime.logger.info("SSL certificates not found. Starting proxy with HTTP on port %s...", port)
         app.run(host="0.0.0.0", port=port, debug=runtime.config.debug_mode)
-
 

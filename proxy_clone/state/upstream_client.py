@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import requests
 
@@ -22,11 +22,16 @@ class SessionLike(Protocol):
     def request(self, method: str, url: str, timeout: int, **kwargs: Any) -> requests.Response: ...
 
 
+def default_session_factory() -> SessionLike:
+    # `requests.Session` satisfies `SessionLike`, but requests' types don't declare it.
+    return cast(SessionLike, requests.Session())
+
+
 @dataclass
 class UpstreamClient:
     base_url: str
     ssl_verify: bool
-    session_factory: Callable[[], SessionLike] = requests.Session
+    session_factory: Callable[[], SessionLike] = default_session_factory
     session: SessionLike = field(init=False)
 
     def __post_init__(self) -> None:
@@ -59,4 +64,3 @@ class UpstreamClient:
         if isinstance(payload, dict):
             return payload
         return {"error": "Upstream returned an unexpected response payload"}
-

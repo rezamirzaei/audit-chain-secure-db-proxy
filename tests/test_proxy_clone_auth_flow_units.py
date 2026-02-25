@@ -70,7 +70,7 @@ def test_upstream_client_builds_urls_and_parses_json():
     class DummySession:
         def __init__(self) -> None:
             self.verify = False
-            self.cookies = {}
+            self.cookies: dict[str, str] = {}
             self.calls: list[tuple[str, str, int, dict]] = []
 
         def request(self, method: str, url: str, timeout: int, **kwargs):

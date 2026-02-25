@@ -37,7 +37,9 @@ class ProxyApiController:
     def api_service(self) -> Any:
         return self.deps.api_service_factory()
 
-    def require_proxy_session(self, not_connected_message: str) -> tuple[ProxyVaultLike | None, Any | None]:
+    def require_proxy_session(
+        self, not_connected_message: str
+    ) -> tuple[ProxyVaultLike | None, tuple[Any, int] | None]:
         if self.vault.ensure_session():
             return self.vault, None
         return None, (jsonify({"error": not_connected_message}), 401)
@@ -63,6 +65,7 @@ class ProxyApiController:
         vault, error_response = self.require_proxy_session("Not connected to database server")
         if error_response is not None:
             return error_response
+        assert vault is not None
 
         payload = self.request_validator.parse_json(request, self.query_request_model)
         response = vault.proxy_request("POST", "/api/query", json={"query": payload.query})
@@ -72,6 +75,7 @@ class ProxyApiController:
         vault, error_response = self.require_proxy_session("Not connected")
         if error_response is not None:
             return error_response
+        assert vault is not None
 
         response = vault.proxy_request("GET", "/api/tables")
         return self.json_proxy_response(response, failure_message="Failed to connect")
@@ -80,6 +84,7 @@ class ProxyApiController:
         vault, error_response = self.require_proxy_session("Not connected")
         if error_response is not None:
             return error_response
+        assert vault is not None
 
         path_params = self.request_validator.parse_mapping(
             {"table_name": table_name},

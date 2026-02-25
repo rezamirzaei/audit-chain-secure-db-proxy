@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 """Verify tamper-evident audit log chain.
 
 Recommended usage:
   python -m database_server.tools.verify_audit_chain
 """
+
+from __future__ import annotations
 
 import os
 

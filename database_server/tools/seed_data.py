@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 """Idempotent seed script for demo data.
 
 Recommended usage:
   python -m database_server.tools.seed_data
 """
+
+from __future__ import annotations
 
 from datetime import date
 from typing import Any

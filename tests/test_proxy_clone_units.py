@@ -12,7 +12,7 @@ from proxy_clone.web.routes import ProxyWebController
 
 class DummyHttpSession:
     def __init__(self) -> None:
-        self.verify = None
+        self.verify: bool = False
         self.cookies: dict[str, str] = {}
 
     def request(self, method, url, timeout=None, **kwargs):  # pragma: no cover - defensive stub

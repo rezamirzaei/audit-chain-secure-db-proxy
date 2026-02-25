@@ -7,11 +7,12 @@ from flask import jsonify, redirect, render_template, request, session, url_for
 
 from .types import ProxyVaultLike
 
-CONNECT_STEP_CREDENTIALS = "credentials"
-CONNECT_STEP_TOTP = "totp"
-CONNECT_STEP_SECURITY = "security"
-VALID_CONNECT_STEPS = {CONNECT_STEP_CREDENTIALS, CONNECT_STEP_TOTP, CONNECT_STEP_SECURITY}
 ConnectStep = Literal["credentials", "totp", "security"]
+
+CONNECT_STEP_CREDENTIALS: ConnectStep = "credentials"
+CONNECT_STEP_TOTP: ConnectStep = "totp"
+CONNECT_STEP_SECURITY: ConnectStep = "security"
+VALID_CONNECT_STEPS: set[ConnectStep] = {CONNECT_STEP_CREDENTIALS, CONNECT_STEP_TOTP, CONNECT_STEP_SECURITY}
 
 
 def connect_step_request_value() -> str:
@@ -184,4 +185,3 @@ class ProxyConnectController:
         self.drop_current_vault()
         session.pop("security_question", None)
         return redirect(url_for("connect"))
-

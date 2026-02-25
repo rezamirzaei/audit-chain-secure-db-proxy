@@ -85,6 +85,7 @@ class AuthLoginUseCases:
         user, error_response = self.require_pending_user()
         if error_response is not None:
             return error_response
+        assert user is not None
 
         if not user.totp_secret or not self.totp_service.verify(user.totp_secret, totp_code):
             self.record_login_failure()
@@ -100,6 +101,7 @@ class AuthLoginUseCases:
         user, error_response = self.require_pending_user()
         if error_response is not None:
             return error_response
+        assert user is not None
 
         answer = (payload.security_answer or "").lower()
         if not self.password_service.verify_and_upgrade(self.db_session, user, "security_answer", answer):

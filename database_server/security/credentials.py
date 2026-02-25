@@ -135,19 +135,21 @@ class PasswordService:
 
         if is_argon2(stored):
             try:
-                ok = self._hasher.verify(stored, provided)
-                return ok, self._hasher.check_needs_rehash(stored) if ok else False
+                # argon2's `verify()` returns `True` or raises. Using the exception
+                # flow keeps mypy happy (some stubs type it as `Literal[True]`).
+                self._hasher.verify(stored, provided)
             except argon2_exceptions.VerifyMismatchError:
                 return False, False
             except Exception:
                 return False, False
+            return True, self._hasher.check_needs_rehash(stored)
 
         if is_hash(stored):
             ok = check_password_hash(stored, provided)
             return ok, ok  # upgrade to argon2 when verified
 
-        ok = bool(hmac.compare_digest(stored, provided))
-        return ok, ok  # upgrade to argon2 when verified
+        ok = hmac.compare_digest(stored, provided)
+        return bool(ok), bool(ok)  # upgrade to argon2 when verified
 
     def verify_and_upgrade(self, session: Any, user: Any, field: str, provided: str) -> bool:
         stored = getattr(user, field)

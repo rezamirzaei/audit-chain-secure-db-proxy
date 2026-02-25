@@ -39,7 +39,14 @@ class AppBootstrap:
 
     def apply_proxy(self, app: Flask) -> None:
         if self._config.trust_proxy:
-            app.wsgi_app = ProxyFix(cast(Any, app.wsgi_app), x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
+            cast(Any, app).wsgi_app = ProxyFix(
+                cast(Any, app.wsgi_app),
+                x_for=1,
+                x_proto=1,
+                x_host=1,
+                x_port=1,
+                x_prefix=1,
+            )
 
     def configure_sessions(self, app: Flask) -> None:
         package_root = Path(__file__).resolve().parents[1]
