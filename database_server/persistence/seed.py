@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from contextlib import contextmanager
 from datetime import date, datetime
-from typing import Any, Iterator
+from typing import Any, Iterator, Protocol
 
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import OperationalError
@@ -14,6 +14,12 @@ from ..security.credentials import PasswordService, TotpService
 from ..domain import build_audit_payload, hash_audit_payload
 from .models import AuditLog, AuthUser, Base, Department, Employee, Project
 from .session_manager import DatabaseSessionManager
+
+
+class SessionManagerLike(Protocol):
+    """Minimal manager interface required by DatabaseSeeder."""
+
+    def session(self) -> Session: ...
 
 
 def _should_retry_db_error(error: OperationalError) -> bool:
@@ -138,7 +144,7 @@ def init_db(
 class DatabaseSeeder:
     def __init__(
         self,
-        manager: DatabaseSessionManager,
+        manager: SessionManagerLike,
         demo_mode: bool,
         enable_totp_test_endpoint: bool,
         *,

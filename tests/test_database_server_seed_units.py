@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+from typing import Any
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -10,7 +10,7 @@ from database_server.persistence.models import AuthUser, Base
 from database_server.persistence.seed import DatabaseSeeder
 
 
-def test_database_seeder_upgrades_legacy_auth_hashes_and_defaults_totp_enabled():
+def test_database_seeder_upgrades_legacy_auth_hashes_and_defaults_totp_enabled() -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine, expire_on_commit=False, future=True)
@@ -35,7 +35,11 @@ def test_database_seeder_upgrades_legacy_auth_hashes_and_defaults_totp_enabled()
     def log_info(msg: str, *args: object) -> None:
         logs.append(msg % args if args else msg)
 
-    dummy_manager = SimpleNamespace()
+    class DummyManager:
+        def session(self) -> Any:
+            raise AssertionError("Not used in this unit test")
+
+    dummy_manager = DummyManager()
     seeder = DatabaseSeeder(
         dummy_manager,
         demo_mode=False,

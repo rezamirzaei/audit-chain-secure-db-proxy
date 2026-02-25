@@ -8,7 +8,7 @@ from database_server.api.schemas import LoginApiRequest
 from database_server.domain import build_audit_payload, hash_audit_payload
 
 
-def test_build_audit_payload_preserves_delimiters_for_missing_fields():
+def test_build_audit_payload_preserves_delimiters_for_missing_fields() -> None:
     payload = build_audit_payload(
         "prevhash",
         timestamp="2026-02-23T00:00:00",
@@ -21,7 +21,7 @@ def test_build_audit_payload_preserves_delimiters_for_missing_fields():
     assert payload == "prevhash|2026-02-23T00:00:00|7|query||"
 
 
-def test_hash_audit_payload_is_stable_and_sensitive_to_changes():
+def test_hash_audit_payload_is_stable_and_sensitive_to_changes() -> None:
     payload = "a|b|c"
     same_hash = hash_audit_payload(payload)
     changed_hash = hash_audit_payload("a|b|d")
@@ -31,7 +31,7 @@ def test_hash_audit_payload_is_stable_and_sensitive_to_changes():
     assert len(same_hash) == 64
 
 
-def test_login_session_state_pending_user_id_parses_and_rejects_invalid_values():
+def test_login_session_state_pending_user_id_parses_and_rejects_invalid_values() -> None:
     store: dict[str, object] = {}
     state = LoginSessionState(session_store=store)
 
@@ -44,7 +44,7 @@ def test_login_session_state_pending_user_id_parses_and_rejects_invalid_values()
     assert state.pending_user_id() is None
 
 
-def test_login_session_state_finalize_login_moves_pending_fields_and_clears_auth_step_keys():
+def test_login_session_state_finalize_login_moves_pending_fields_and_clears_auth_step_keys() -> None:
     store: dict[str, object] = {
         "pending_user_id": 7,
         "pending_username": "alice",
@@ -72,7 +72,7 @@ def test_login_session_state_finalize_login_moves_pending_fields_and_clears_auth
     assert "auth_step" not in store
 
 
-def test_login_api_request_validates_totp_format():
+def test_login_api_request_validates_totp_format() -> None:
     with pytest.raises(ValidationError):
         LoginApiRequest(step="totp", totp_code="")
     with pytest.raises(ValidationError):
