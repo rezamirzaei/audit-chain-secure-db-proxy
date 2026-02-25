@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from database_server.config import AppConfig
-from proxy_clone.config import ProxyCloneConfig
+from database_server.server.config import AppConfig
+from proxy_clone.server.config import ProxyCloneConfig
 
 
 def test_database_server_config_defaults_secure_cookie_when_certs_exist(monkeypatch):
     monkeypatch.setenv("APP_ENV", "demo")
     monkeypatch.delenv("SESSION_COOKIE_SECURE", raising=False)
 
-    monkeypatch.setattr("database_server.config.SSLConfig.has_certificates", lambda: True)
+    monkeypatch.setattr("database_server.server.config.SSLConfig.has_certificates", lambda: True)
     config = AppConfig.from_env()
     assert config.session_cookie_secure is True
 
@@ -27,7 +27,6 @@ def test_proxy_clone_config_defaults_secure_cookie_when_certs_exist(monkeypatch)
     monkeypatch.setenv("APP_ENV", "demo")
     monkeypatch.delenv("SESSION_COOKIE_SECURE", raising=False)
 
-    monkeypatch.setattr("proxy_clone.config.SSLConfig.has_certificates", lambda: True)
+    monkeypatch.setattr("proxy_clone.server.config.SSLConfig.has_certificates", lambda: True)
     config = ProxyCloneConfig.from_env()
     assert config.session_cookie_secure is True
-

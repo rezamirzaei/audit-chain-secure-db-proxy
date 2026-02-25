@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import AuthUser
+from ..persistence.models import AuthUser
 
 
 class UserService:
@@ -15,4 +15,3 @@ class UserService:
 
     def get_by_id(self, user_id: int) -> AuthUser | None:
         return self.session.execute(select(AuthUser).where(AuthUser.id == user_id)).scalar_one_or_none()
-

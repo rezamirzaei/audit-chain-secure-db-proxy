@@ -32,14 +32,14 @@ sleep 1
 
 echo ""
 echo "Starting Database Server on port 5001..."
-APP_ENV=demo ENABLE_TOTP_TEST_ENDPOINT=true ENABLE_QUERY_CONSOLE=true $PYTHON_CMD -m database_server.app &
+APP_ENV=demo ENABLE_TOTP_TEST_ENDPOINT=true ENABLE_QUERY_CONSOLE=true $PYTHON_CMD -m database_server &
 DB_PID=$!
 
 sleep 2
 
 echo ""
 echo "Starting Proxy Server on port 8080..."
-APP_ENV=demo SSL_VERIFY=false $PYTHON_CMD -m proxy_clone.app &
+APP_ENV=demo SSL_VERIFY=false $PYTHON_CMD -m proxy_clone &
 PROXY_PID=$!
 
 sleep 2

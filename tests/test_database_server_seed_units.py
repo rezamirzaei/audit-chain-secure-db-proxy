@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from database_server.auth_utils import PasswordService
-from database_server.models import AuthUser, Base
+from database_server.security.credentials import PasswordService
+from database_server.persistence.models import AuthUser, Base
 from database_server.persistence.seed import DatabaseSeeder
 
 
@@ -54,4 +54,3 @@ def test_database_seeder_upgrades_legacy_auth_hashes_and_defaults_totp_enabled()
 
     assert upgraded.totp_enabled is True
     assert logs == ["Upgraded legacy auth hashes to Argon2"]
-

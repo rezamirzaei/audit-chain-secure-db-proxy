@@ -16,7 +16,7 @@ from typing import Any, MutableMapping, cast
 
 from flask import Flask, g, request, session
 
-from .api import (
+from ..api import (
     DatabaseApiBlueprintDependencies,
     DatabaseApiService,
     LoginSessionState,
@@ -24,7 +24,7 @@ from .api import (
     RequestValidator,
     create_api_blueprint,
 )
-from .api.schemas import (
+from ..api.schemas import (
     HealthResponse,
     LoginApiRequest,
     LogoutResponse,
@@ -43,11 +43,11 @@ from shared.web_common import (
     login_required,
 )
 from .config import AppConfig
-from .persistence import init_db as init_database
+from ..persistence.seed import init_db as init_database
 from .runtime import DatabaseServerRuntime, create_runtime
-from .domain import AuditService, QueryService, SchemaService, TableService, UserService
+from ..domain import AuditService, QueryService, SchemaService, TableService, UserService
 from shared.ssl_utils import get_ssl_context
-from .web import DatabaseWebRoutes
+from ..web import DatabaseWebRoutes
 
 
 @dataclass(frozen=True)
@@ -213,6 +213,3 @@ def main() -> None:
         runtime.logger.info("SSL certificates not found. Starting server with HTTP on port %s...", port)
         app.run(host="0.0.0.0", port=port, debug=runtime.config.debug_mode)
 
-
-if __name__ == "__main__":
-    main()

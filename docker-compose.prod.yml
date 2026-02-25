@@ -63,8 +63,8 @@ services:
 
   database-server:
     build:
-      context: ./database_server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: database_server/Dockerfile
     container_name: database-server
     environment:
       - APP_ENV=production
@@ -84,12 +84,12 @@ services:
       - redis
     networks:
       - app-network
-    command: ["gunicorn", "-c", "gunicorn.conf.py", "app:app"]
+    command: ["gunicorn", "-c", "database_server/server/gunicorn_conf.py", "database_server.server.wsgi:app"]
 
   proxy-clone:
     build:
-      context: ./proxy_clone
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: proxy_clone/Dockerfile
     container_name: proxy-clone
     environment:
       - APP_ENV=production
@@ -106,7 +106,7 @@ services:
       - redis
     networks:
       - app-network
-    command: ["gunicorn", "-c", "gunicorn.conf.py", "app:app"]
+    command: ["gunicorn", "-c", "proxy_clone/server/gunicorn_conf.py", "proxy_clone.server.wsgi:app"]
 
   redis:
     image: redis:7-alpine

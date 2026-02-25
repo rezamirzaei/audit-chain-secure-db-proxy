@@ -8,7 +8,7 @@ from typing import Any, Protocol
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import AuditLog
+from ..persistence.models import AuditLog
 
 
 def build_audit_payload(
@@ -90,4 +90,3 @@ class AuditService:
     def verify_chain(self) -> tuple[bool, dict[str, Any] | None]:
         rows = self.session.execute(select(AuditLog).order_by(AuditLog.id)).scalars().all()
         return verify_audit_chain(rows)
-

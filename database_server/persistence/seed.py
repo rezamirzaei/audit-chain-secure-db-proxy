@@ -6,9 +6,9 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..auth_utils import PasswordService, TotpService
+from ..security.credentials import PasswordService, TotpService
 from ..domain import build_audit_payload, hash_audit_payload
-from ..models import AuditLog, AuthUser, Base, Department, Employee, Project
+from .models import AuditLog, AuthUser, Base, Department, Employee, Project
 from .session_manager import DatabaseSessionManager
 
 

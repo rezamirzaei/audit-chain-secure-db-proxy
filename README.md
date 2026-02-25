@@ -291,15 +291,22 @@ Hands-on verification:
 .
 ├── docker-compose.yml
 ├── docker-compose.prod.yml
+├── shared/
 ├── nginx/
 │   ├── nginx.conf
 │   └── certs/
 ├── database_server/
 │   ├── Dockerfile
 │   ├── requirements.txt
-│   ├── gunicorn.conf.py
-│   ├── app.py
-│   ├── verify_audit_chain.py
+│   ├── server/
+│   │   ├── app.py
+│   │   ├── wsgi.py
+│   │   └── gunicorn_conf.py
+│   ├── persistence/
+│   │   └── models.py
+│   ├── tools/
+│   │   ├── seed_data.py
+│   │   └── verify_audit_chain.py
 │   └── templates/
 │       ├── base.html
 │       ├── login.html
@@ -312,8 +319,10 @@ Hands-on verification:
 └── proxy_clone/
     ├── Dockerfile
     ├── requirements.txt
-    ├── gunicorn.conf.py
-    ├── app.py
+    ├── server/
+    │   ├── app.py
+    │   ├── wsgi.py
+    │   └── gunicorn_conf.py
     ├── certs/
     └── templates/
         ├── base.html

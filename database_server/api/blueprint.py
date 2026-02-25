@@ -9,7 +9,7 @@ from typing import Any
 from flask import Blueprint, jsonify, request, session
 from sqlalchemy import select
 
-from ..models import AuthUser
+from ..persistence.models import AuthUser
 from shared.request_validation import RequestValidatorLike
 
 DecoratorFunc = Callable[[Any], Any]

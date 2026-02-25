@@ -1,0 +1,33 @@
+.git
+.github
+.gitignore
+
+# Local env/editor files
+.env
+.env.*
+.idea
+.vscode
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Logs
+*.log
+
+# Local demo certs and data (these are typically mounted at runtime)
+database_server/certs/*.pem
+proxy_clone/certs/*.pem
+nginx/certs/*.pem
+database_server/data/*.db
+database_server/data/sessions/
+proxy_clone/data/sessions/
+

@@ -15,7 +15,7 @@ from typing import Any
 from flask import Flask, session
 from werkzeug.local import LocalProxy
 
-from .api import (
+from ..api import (
     ConnectApiRequest,
     ProxyApiBlueprintDependencies,
     ProxyApiService,
@@ -36,9 +36,9 @@ from shared.web_common import (
 from .config import ProxyCloneConfig
 from .runtime import ProxyCloneRuntime, create_runtime
 from shared.ssl_utils import get_ssl_context
-from .state import CredentialVault, VaultRegistry
-from .web import ProxyAuthGuards
-from .web.routes import ProxyWebRouteDependencies, register_web_routes
+from ..state import CredentialVault, VaultRegistry
+from ..web import ProxyAuthGuards
+from ..web.routes import ProxyWebRouteDependencies, register_web_routes
 
 
 @dataclass(frozen=True)
@@ -162,5 +162,3 @@ def main() -> None:
         app.run(host="0.0.0.0", port=port, debug=runtime.config.debug_mode)
 
 
-if __name__ == "__main__":
-    main()

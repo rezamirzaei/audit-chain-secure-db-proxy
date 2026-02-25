@@ -5,9 +5,9 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from .auth_utils import PasswordService, TotpService
+from ..security.credentials import PasswordService, TotpService
 from .config import AppConfig
-from .persistence import DatabaseSessionManager
+from ..persistence import DatabaseSessionManager
 
 
 class InMemoryRateLimiter:

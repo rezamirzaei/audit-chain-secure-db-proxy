@@ -7,7 +7,7 @@ from flask import Flask, render_template, request, session
 from sqlalchemy import func, select
 from sqlalchemy.orm import aliased
 
-from ..models import AuditLog, AuthUser, Department, Employee, Project
+from ..persistence.models import AuditLog, AuthUser, Department, Employee, Project
 
 
 class DatabasePageRoutes:
@@ -153,4 +153,3 @@ class DatabasePageRoutes:
         ).all()
         logs = self.audit_logs_payload(rows)
         return render_template("audit.html", logs=logs)
-

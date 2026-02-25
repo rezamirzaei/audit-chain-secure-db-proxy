@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from database_server.auth_utils import (
+from database_server.security.credentials import (
     DEFAULT_TOTP_TIME_STEP_SECONDS,
     PasswordService,
     TotpService,
@@ -50,4 +50,3 @@ def test_password_service_upgrades_plaintext_values():
     assert isinstance(dummy_user.password, str)
     assert dummy_user.password.startswith("$argon2")
     assert dummy_session.committed is True
-

@@ -11,8 +11,9 @@ from typing import Any
 
 from sqlalchemy import select
 
-from ..persistence import DatabaseSessionManager, init_db
-from ..models import Department, Employee, Project
+from ..persistence import DatabaseSessionManager
+from ..persistence.seed import init_db
+from ..persistence.models import Department, Employee, Project
 
 
 def log_info(msg: str, *args: Any) -> None:

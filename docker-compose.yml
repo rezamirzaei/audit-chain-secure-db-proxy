@@ -67,8 +67,8 @@ services:
   # Runs on HTTPS with self-signed certificate
   database-server:
     build:
-      context: ./database_server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: database_server/Dockerfile
     container_name: database-server
     ports:
       - "5002:5000"
@@ -103,8 +103,8 @@ services:
   # - Connects to database server via HTTPS
   proxy-clone:
     build:
-      context: ./proxy_clone
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: proxy_clone/Dockerfile
     container_name: proxy-clone
     ports:
       - "8080:8080"

@@ -2,14 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Create directories for data and certificates
-RUN mkdir -p /app/data /app/certs /app/database_server
+# Create directories for runtime data and certificates.
+RUN mkdir -p /app/data /app/certs
 
-COPY requirements.txt /tmp/requirements.txt
+COPY database_server/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-# Copy application code into a proper package path
-COPY . /app/database_server
+# Copy only the required packages into the image.
+COPY shared /app/shared
+COPY database_server /app/database_server
 
 ENV PYTHONPATH=/app
 
