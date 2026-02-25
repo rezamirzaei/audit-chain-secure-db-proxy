@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import time
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from ..security.credentials import PasswordService, TotpService
@@ -12,12 +14,62 @@ from .models import AuditLog, AuthUser, Base, Department, Employee, Project
 from .session_manager import DatabaseSessionManager
 
 
+def _should_retry_db_error(error: OperationalError) -> bool:
+    message = str(getattr(error, "orig", error)).lower()
+    return any(
+        fragment in message
+        for fragment in (
+            "connection refused",
+            "could not connect to server",
+            "the database system is starting up",
+            "timeout expired",
+            "connection timed out",
+        )
+    )
+
+
+def wait_for_database_ready(
+    manager: DatabaseSessionManager,
+    *,
+    log_info: Any,
+    timeout_seconds: float = 60.0,
+    poll_interval_seconds: float = 1.0,
+) -> None:
+    """Block until the DB accepts connections (primarily for docker compose startups)."""
+    if manager.config.backend != "postgres":
+        return
+
+    deadline = time.monotonic() + timeout_seconds
+    attempt = 0
+    last_error: OperationalError | None = None
+    while time.monotonic() < deadline:
+        attempt += 1
+        try:
+            with manager.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            if attempt > 1:
+                log_info("Database connection established after %s attempt(s).", attempt)
+            return
+        except OperationalError as exc:
+            if not _should_retry_db_error(exc):
+                raise
+            last_error = exc
+            if attempt == 1:
+                log_info("Waiting for database to become ready...")
+            time.sleep(poll_interval_seconds)
+
+    log_info("Database did not become ready after %s seconds.", timeout_seconds)
+    if last_error is not None:
+        raise last_error
+
+
 def init_db(
     manager: DatabaseSessionManager,
     demo_mode: bool,
     enable_totp_test_endpoint: bool,
     log_info: Any,
 ) -> None:
+    wait_for_database_ready(manager, log_info=log_info)
     Base.metadata.create_all(manager.engine)
     seeder = DatabaseSeeder(manager, demo_mode=demo_mode, enable_totp_test_endpoint=enable_totp_test_endpoint)
     seeder.seed(log_info=log_info)
